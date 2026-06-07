@@ -1,0 +1,36 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Refactor admin Users section to have a sub-menu before requiring a user ID. The sub-menu shows options: Search User (by ID), Bonus All Users, Bonus Top 10. Only per-user actions (Ban, Add Balance, Remove Balance, Add Bonus, Remove Bonus) appear AFTER searching a specific user by ID.",
+  "status": "completed",
+  "steps": [
+    "1. Add a new FSM state `user_menu` to AdminFlow (after `user_search` state around line 1900) that represents the Users sub-menu.",
+    "2. Add a new button constant: BTN_SEARCH_USER = _b('🔍 Search User') around line 717 with the other admin user action buttons.",
+    "3. Create a new keyboard function `admin_users_menu_kb()` that shows: [BTN_SEARCH_USER], [BTN_BONUS_ALL_USERS, BTN_BONUS_TOP10], [BACK_BTN, HOME_BTN].",
+    "4. Modify the `admin_users` handler (line 5678) to set state to `AdminFlow.user_menu` instead of `AdminFlow.user_search`, show total users count, and use the new `admin_users_menu_kb()` keyboard.",
+    "5. Create a new handler `@router_admin.message(AdminFlow.user_menu)` that handles: BTN_SEARCH_USER -> set state to user_search and ask for ID; BTN_BONUS_ALL_USERS -> set state to bonus_all_amount and ask for amount; BTN_BONUS_TOP10 -> set state to bonus_top10_amount and ask for amount; BACK_BTN/HOME_BTN -> return to admin main menu.",
+    "6. Remove BTN_BONUS_ALL_USERS and BTN_BONUS_TOP10 from the `admin_user_actions_kb()` keyboard (line 2173). It should only show: ban/unban, add/remove balance, add/remove bonus, back, home.",
+    "7. Update the BACK_BTN handler in `admin_user_action` (AdminFlow.user_detail state, line 5723) to go back to `AdminFlow.user_menu` with `admin_users_menu_kb()` instead of going to `user_search`.",
+    "8. Update the cancel/back handlers in `admin_bonus_all_amount` (line 5979) and `admin_bonus_top10_amount` (line 6113) to return to `AdminFlow.user_menu` with `admin_users_menu_kb()` instead of `AdminFlow.user_detail` with user_actions_kb (since these are now accessed from the sub-menu, not from a specific user).",
+    "9. Update the completion callbacks `admin_bonusall_done` and `admin_bonustop_done` to return to `AdminFlow.user_menu` with `admin_users_menu_kb()` instead of `AdminFlow.user_detail`.",
+    "10. Update the `admin_search_user` handler (line 5688) BACK_BTN handling to return to `AdminFlow.user_menu` with `admin_users_menu_kb()` instead of admin main menu."
+  ],
+  "acceptance_criteria": [
+    "Pressing '👥 Users' in admin shows a sub-menu with Search User, Bonus All Users, Bonus Top 10 options",
+    "Pressing 'Search User' asks for user ID, then shows user details + per-user actions (ban, balance, bonus for that user only)",
+    "Per-user action keyboard no longer includes Bonus All Users or Bonus Top 10",
+    "Bonus All Users and Bonus Top 10 are accessible directly from the users sub-menu without needing a user ID first",
+    "Back button from user detail returns to the users sub-menu",
+    "Back button from users sub-menu returns to admin main menu",
+    "Cancel/back from bonus_all/bonus_top10 amount input returns to users sub-menu",
+    "python -c \"import py_compile; py_compile.compile('bot.py', doraise=True)\" passes without errors"
+  ],
+  "verification": [
+    "python -c \"import py_compile; py_compile.compile('bot.py', doraise=True)\"",
+    "grep -n 'user_menu' bot.py to confirm new state exists",
+    "grep -n 'admin_users_menu_kb' bot.py to confirm new keyboard exists",
+    "grep -n 'BTN_SEARCH_USER' bot.py to confirm new button exists"
+  ],
+  "blocked_reason": null,
+  "findings": "All changes implemented and verified. Syntax check passes. python3 command needed (not python) due to pyenv setup. The bonus_all and bonus_top10 flows now return to user_menu consistently. Post-review refactoring: extracted 9 duplicated menu-rendering blocks into a single _show_user_menu(target, state) helper function placed after admin_users_menu_kb(). Net reduction of 63 lines."
+}
