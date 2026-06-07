@@ -438,12 +438,21 @@ def make_products_xlsx(products: dict, all_stocks: dict = None) -> bytes:
 
     # Per-product stock sheets
     if all_stocks:
+        used_sheet_names = set()
         for pid, product in products.items():
             stock = all_stocks.get(pid) or {}
             if not stock:
                 continue
             pname = product.get("name", pid)
             safe_title = re.sub(r"[\\/*?:\[\]]", "", pname)[:28] or pid[:28]
+            # Handle sheet-name collisions
+            original_title = safe_title
+            counter = 2
+            while safe_title.lower() in used_sheet_names:
+                suffix = f"({counter})"
+                safe_title = original_title[:28 - len(suffix)] + suffix
+                counter += 1
+            used_sheet_names.add(safe_title.lower())
             stock_ws = wb.create_sheet(safe_title)
             stock_ws.append(["#", "Email", "Password", "Raw"])
             for cell in stock_ws[1]:
@@ -5303,7 +5312,8 @@ async def admin_products_import(message: Message, state: FSMContext):
         f"✅ <b>Import Complete!</b>\n{_SEP}\n"
         f"✅ Created: <b>{created}</b> product(s)\n"
         f"❌ Skipped: <b>{skipped}</b>{stock_line}\n\n"
-        f"<b>Imported products:</b>\n{preview}",
+        f"<b>Imported products:</b>\n{preview}\n\n"
+        f"<i>ℹ️ Note: Import always creates new products. It does not update existing ones.</i>",
     )
 
 
@@ -6026,6 +6036,7 @@ async def admin_bonusall_done(call: CallbackQuery, state: FSMContext):
     if not valid_selected:
         await call.answer("Selected products no longer exist. Please re-select.", show_alert=True)
         return
+    await call.answer()
     all_users = await get_all_users()
     count = 0
     for uid_str in all_users:
@@ -6044,6 +6055,7 @@ async def admin_bonusall_done(call: CallbackQuery, state: FSMContext):
                 )
             except Exception:
                 pass
+            await asyncio.sleep(0.05)
         except Exception:
             pass
     prod_names = [products[p]["name"] for p in valid_selected if p in products]
@@ -6053,12 +6065,15 @@ async def admin_bonusall_done(call: CallbackQuery, state: FSMContext):
         f"📦 Products: {', '.join(prod_names)}"
     )
     user = data.get("target_user", {})
-    await state.set_state(AdminFlow.user_detail)
-    await call.message.answer(
-        fmt_user_info(user),
-        reply_markup=admin_user_actions_kb(user.get("is_banned", False)),
-    )
-    await call.answer()
+    if not user:
+        await state.set_state(AdminFlow.menu)
+        await call.message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+    else:
+        await state.set_state(AdminFlow.user_detail)
+        await call.message.answer(
+            fmt_user_info(user),
+            reply_markup=admin_user_actions_kb(user.get("is_banned", False)),
+        )
 
 
 # ── Bonus Top 10 ──────────────────────────────────────────────────
@@ -6155,11 +6170,12 @@ async def admin_bonustop_done(call: CallbackQuery, state: FSMContext):
     if not valid_selected:
         await call.answer("Selected products no longer exist. Please re-select.", show_alert=True)
         return
+    await call.answer()
     all_users = await get_all_users()
     # Sort by order_count descending, take top 10
     sorted_users = sorted(
         all_users.items(),
-        key=lambda x: x[1].get("order_count", 0),
+        key=lambda x: x[1].get("order_count", 0) if isinstance(x[1], dict) else 0,
         reverse=True,
     )[:10]
     count = 0
@@ -6180,6 +6196,7 @@ async def admin_bonustop_done(call: CallbackQuery, state: FSMContext):
                 )
             except Exception:
                 pass
+            await asyncio.sleep(0.05)
         except Exception:
             pass
     prod_names = [products[p]["name"] for p in valid_selected if p in products]
@@ -6189,12 +6206,15 @@ async def admin_bonustop_done(call: CallbackQuery, state: FSMContext):
         f"📦 Products: {', '.join(prod_names)}"
     )
     user = data.get("target_user", {})
-    await state.set_state(AdminFlow.user_detail)
-    await call.message.answer(
-        fmt_user_info(user),
-        reply_markup=admin_user_actions_kb(user.get("is_banned", False)),
-    )
-    await call.answer()
+    if not user:
+        await state.set_state(AdminFlow.menu)
+        await call.message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+    else:
+        await state.set_state(AdminFlow.user_detail)
+        await call.message.answer(
+            fmt_user_info(user),
+            reply_markup=admin_user_actions_kb(user.get("is_banned", False)),
+        )
 
 
 # ── Coupons ────────────────────────────────────────────────────────
