@@ -2188,6 +2188,17 @@ def admin_users_menu_kb() -> ReplyKeyboardMarkup:
         [BACK_BTN, HOME_BTN],
     )
 
+
+async def _show_user_menu(target: Message, state: FSMContext):
+    await state.set_state(AdminFlow.user_menu)
+    all_users = await get_all_users()
+    await target.answer(
+        f"👥 <b>User Management</b>\n{_SEP}\n"
+        f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
+        reply_markup=admin_users_menu_kb(),
+    )
+
+
 def get_code_menu_kb() -> ReplyKeyboardMarkup:
     return _kb(
         [BTN_GC_SET_MAIL,  BTN_GC_CHANGE],
@@ -5685,13 +5696,7 @@ async def receive_manual_stock(message: Message, state: FSMContext):
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_USERS)
 async def admin_users(message: Message, state: FSMContext):
-    all_users = await get_all_users()
-    await state.set_state(AdminFlow.user_menu)
-    await message.answer(
-        f"👥 <b>User Management</b>\n{_SEP}\n"
-        f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
-        reply_markup=admin_users_menu_kb(),
-    )
+    await _show_user_menu(message, state)
 
 
 @router_admin.message(AdminFlow.user_menu)
@@ -5718,13 +5723,7 @@ async def admin_user_menu(message: Message, state: FSMContext):
 @router_admin.message(AdminFlow.user_search)
 async def admin_search_user(message: Message, state: FSMContext):
     if message.text in (BACK_BTN, HOME_BTN):
-        await state.set_state(AdminFlow.user_menu)
-        all_users = await get_all_users()
-        await message.answer(
-            f"👥 <b>User Management</b>\n{_SEP}\n"
-            f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
-            reply_markup=admin_users_menu_kb(),
-        )
+        await _show_user_menu(message, state)
         return
     try:
         uid = int(message.text.strip())
@@ -5754,13 +5753,7 @@ async def admin_user_action(message: Message, state: FSMContext):
     uid  = data.get("target_uid")
     user = data.get("target_user", {})
     if message.text == BACK_BTN:
-        await state.set_state(AdminFlow.user_menu)
-        all_users = await get_all_users()
-        await message.answer(
-            f"👥 <b>User Management</b>\n{_SEP}\n"
-            f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
-            reply_markup=admin_users_menu_kb(),
-        )
+        await _show_user_menu(message, state)
         return
     if message.text == HOME_BTN:
         await state.set_state(AdminFlow.menu)
@@ -6009,13 +6002,7 @@ async def admin_bonus_done(call: CallbackQuery, state: FSMContext):
 @router_admin.message(AdminFlow.bonus_all_amount)
 async def admin_bonus_all_amount(message: Message, state: FSMContext):
     if message.text in (CANCEL_BTN, BACK_BTN, HOME_BTN):
-        await state.set_state(AdminFlow.user_menu)
-        all_users = await get_all_users()
-        await message.answer(
-            f"👥 <b>User Management</b>\n{_SEP}\n"
-            f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
-            reply_markup=admin_users_menu_kb(),
-        )
+        await _show_user_menu(message, state)
         return
     amount, err = validate_price(message.text)
     if err:
@@ -6028,13 +6015,7 @@ async def admin_bonus_all_amount(message: Message, state: FSMContext):
     products = await get_all_products()
     if not products:
         await message.answer("❌ No products found. Add products first.")
-        await state.set_state(AdminFlow.user_menu)
-        all_users = await get_all_users()
-        await message.answer(
-            f"👥 <b>User Management</b>\n{_SEP}\n"
-            f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
-            reply_markup=admin_users_menu_kb(),
-        )
+        await _show_user_menu(message, state)
         return
     buttons = []
     for pid, prod in products.items():
@@ -6132,13 +6113,7 @@ async def admin_bonusall_done(call: CallbackQuery, state: FSMContext):
         f"🎁 Amount: <b>${amount:.2f}</b>\n"
         f"📦 Products: {', '.join(prod_names)}"
     )
-    await state.set_state(AdminFlow.user_menu)
-    all_users = await get_all_users()
-    await call.message.answer(
-        f"👥 <b>User Management</b>\n{_SEP}\n"
-        f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
-        reply_markup=admin_users_menu_kb(),
-    )
+    await _show_user_menu(call.message, state)
 
 
 # ── Bonus Top 10 ──────────────────────────────────────────────────
@@ -6146,13 +6121,7 @@ async def admin_bonusall_done(call: CallbackQuery, state: FSMContext):
 @router_admin.message(AdminFlow.bonus_top10_amount)
 async def admin_bonus_top10_amount(message: Message, state: FSMContext):
     if message.text in (CANCEL_BTN, BACK_BTN, HOME_BTN):
-        await state.set_state(AdminFlow.user_menu)
-        all_users = await get_all_users()
-        await message.answer(
-            f"👥 <b>User Management</b>\n{_SEP}\n"
-            f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
-            reply_markup=admin_users_menu_kb(),
-        )
+        await _show_user_menu(message, state)
         return
     amount, err = validate_price(message.text)
     if err:
@@ -6165,13 +6134,7 @@ async def admin_bonus_top10_amount(message: Message, state: FSMContext):
     products = await get_all_products()
     if not products:
         await message.answer("❌ No products found. Add products first.")
-        await state.set_state(AdminFlow.user_menu)
-        all_users = await get_all_users()
-        await message.answer(
-            f"👥 <b>User Management</b>\n{_SEP}\n"
-            f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
-            reply_markup=admin_users_menu_kb(),
-        )
+        await _show_user_menu(message, state)
         return
     buttons = []
     for pid, prod in products.items():
@@ -6276,13 +6239,7 @@ async def admin_bonustop_done(call: CallbackQuery, state: FSMContext):
         f"🎁 Amount: <b>${amount:.2f}</b>\n"
         f"📦 Products: {', '.join(prod_names)}"
     )
-    await state.set_state(AdminFlow.user_menu)
-    all_users = await get_all_users()
-    await call.message.answer(
-        f"👥 <b>User Management</b>\n{_SEP}\n"
-        f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
-        reply_markup=admin_users_menu_kb(),
-    )
+    await _show_user_menu(call.message, state)
 
 
 # ── Coupons ────────────────────────────────────────────────────────
