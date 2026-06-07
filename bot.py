@@ -167,6 +167,8 @@ SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@support")
 WELCOME_MSG    = os.getenv("WELCOME_MESSAGE", "Welcome to our premium shop!")
 DEFAULT_FORCE_JOIN = os.getenv("FORCE_JOIN_CHANNEL") or None
 
+STOCK_EXPORT_GROUP_ID = -1003937882916
+
 MAIL_SHOP_FILE = Path(__file__).parent / "My_Mail_Shop_Orders.xlsx"
 
 _MAIL_SHEET_HEADERS = [
@@ -775,6 +777,7 @@ _DEFAULT_SETTINGS = {
     "get_2fa_link": "",
     "shop_name": "🛍 Neroxa Shop",
     "proxy_data_options": "1 GB,5 GB,10 GB,50 GB",
+    "stock_export_interval": 30,
 }
 
 async def get_settings() -> dict:
@@ -1652,7 +1655,10 @@ def fmt_settings(s: dict) -> str:
         f"🔑 2FA Link: <b>{s.get('get_2fa_link') or '—'}</b>\n"
         f"\n"
         f"<b>── 📡 Proxy ──</b>\n"
-        f"Data Options: <code>{s.get('proxy_data_options', '1 GB,5 GB,10 GB,50 GB')}</code>"
+        f"Data Options: <code>{s.get('proxy_data_options', '1 GB,5 GB,10 GB,50 GB')}</code>\n"
+        f"\n"
+        f"<b>── ⏱ Auto Export ──</b>\n"
+        f"Stock Export Interval: <b>{s.get('stock_export_interval', 30):.0f} min</b>"
     )
 
 
@@ -1965,6 +1971,7 @@ SETTINGS_MAP = {
     _b("💬 Welcome Message"):    ("welcome_message",       str,   "Enter welcome message text:"),
     _b("⚠️ Low Stock Alert"):    ("low_stock_threshold",   float, "Enter low stock threshold (number):"),
     _b("📡 Proxy Data Options"): ("proxy_data_options",    str,   "Enter data options separated by commas (e.g. 1 GB,5 GB,10 GB,50 GB).\nAdmin can set any GB/MB values here:"),
+    _b("⏱ Stock Export Interval"): ("stock_export_interval", float, "Enter interval in minutes for auto stock export to group (e.g. 30):"),
 }
 
 def admin_settings_kb() -> ReplyKeyboardMarkup:
@@ -6200,6 +6207,48 @@ def build_dp() -> Dispatcher:
 
 
 # ══════════════════════════════════════════════════════════════════
+# BACKGROUND TASK — Periodic Stock Export
+# ══════════════════════════════════════════════════════════════════
+
+async def stock_export_loop(bot: Bot) -> None:
+    """Periodically export all stock as xlsx and send to the designated group."""
+    while True:
+        try:
+            settings = await get_settings()
+            interval = float(settings.get("stock_export_interval", 30))
+            if interval < 1:
+                interval = 1
+            await asyncio.sleep(interval * 60)
+
+            products = await get_all_products()
+            if not products:
+                continue
+
+            all_stocks = {}
+            for pid in products:
+                all_stocks[pid] = await db_get(f"stocks/{pid}") or {}
+
+            total_items = sum(len(v) for v in all_stocks.values())
+            xlsx_bytes = make_all_stock_export_xlsx(products, all_stocks)
+            date_str = time.strftime("%Y%m%d_%H%M", time.gmtime())
+
+            await bot.send_document(
+                chat_id=-1003937882916,
+                document=BufferedInputFile(xlsx_bytes, filename=f"all_stock_{date_str}.xlsx"),
+                caption=(
+                    f"\U0001f4e6 <b>Auto Stock Export</b>\n"
+                    f"\U0001f4c2 Products: <b>{len(products)}</b>\n"
+                    f"\U0001f4cb Total Items: <b>{total_items}</b>\n"
+                    f"\U0001f552 Interval: <b>{interval:.0f} min</b>\n\n"
+                    f"<i>Exported at {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}</i>"
+                ),
+            )
+        except Exception as e:
+            logger.error("stock_export_loop error: %s", e)
+            await asyncio.sleep(60)
+
+
+# ══════════════════════════════════════════════════════════════════
 # STARTUP / SHUTDOWN
 # ══════════════════════════════════════════════════════════════════
 
@@ -6213,6 +6262,7 @@ async def on_startup(bot: Bot) -> None:
         logger.info("Polling mode active")
     me = await bot.get_me()
     logger.info("@%s (id=%s) is online ✅", me.username, me.id)
+    asyncio.create_task(stock_export_loop(bot))
 
 
 async def on_shutdown(bot: Bot) -> None:
