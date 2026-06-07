@@ -739,6 +739,18 @@ async def use_bonus(uid: int, amount: float) -> float:
     await db_update(f"users/{uid}/bonus", {"amount": new_amount})
     return new_amount
 
+
+def compute_bonus_usage(bonus: dict, pid: str, total: float) -> tuple:
+    """Return (bonus_used, remaining_cost) for a purchase."""
+    bonus_used = 0.0
+    if pid in bonus.get("allowed_products", []) and bonus.get("amount", 0) > 0:
+        if bonus["amount"] >= total:
+            bonus_used = total
+        else:
+            bonus_used = bonus["amount"]
+    remaining_cost = round(total - bonus_used, 4)
+    return bonus_used, remaining_cost
+
 async def get_totp_secret(uid: int) -> Optional[str]:
     user = await get_user(uid)
     return user.get("totp_secret") if user else None
@@ -3057,14 +3069,7 @@ async def mail_confirm(message: Message, state: FSMContext):
 
     # ── Bonus logic ──
     bonus = await get_bonus(uid)
-    bonus_used = 0.0
-    if pid in bonus.get("allowed_products", []) and bonus.get("amount", 0) > 0:
-        if bonus["amount"] >= total:
-            bonus_used = total
-        else:
-            bonus_used = bonus["amount"]
-
-    remaining_cost = round(total - bonus_used, 4)
+    bonus_used, remaining_cost = compute_bonus_usage(bonus, pid, total)
 
     if balance < remaining_cost:
         await state.clear()
@@ -3470,14 +3475,7 @@ async def vpn_confirm(message: Message, state: FSMContext):
 
     # ── Bonus logic ──
     bonus = await get_bonus(uid)
-    bonus_used = 0.0
-    if vpn_pid in bonus.get("allowed_products", []) and bonus.get("amount", 0) > 0:
-        if bonus["amount"] >= price:
-            bonus_used = price
-        else:
-            bonus_used = bonus["amount"]
-
-    remaining_cost = round(price - bonus_used, 4)
+    bonus_used, remaining_cost = compute_bonus_usage(bonus, vpn_pid, price)
 
     if balance < remaining_cost:
         await state.clear()
@@ -3783,14 +3781,7 @@ async def proxy_auto_confirm(message: Message, state: FSMContext):
 
     # ── Bonus logic ──
     bonus = await get_bonus(uid)
-    bonus_used = 0.0
-    if pid in bonus.get("allowed_products", []) and bonus.get("amount", 0) > 0:
-        if bonus["amount"] >= total:
-            bonus_used = total
-        else:
-            bonus_used = bonus["amount"]
-
-    remaining_cost = round(total - bonus_used, 4)
+    bonus_used, remaining_cost = compute_bonus_usage(bonus, pid, total)
 
     if balance < remaining_cost:
         await state.clear()
@@ -4079,14 +4070,7 @@ async def proxy_confirm(message: Message, state: FSMContext):
 
     # ── Bonus logic ──
     bonus = await get_bonus(uid)
-    bonus_used = 0.0
-    if proxy_pid in bonus.get("allowed_products", []) and bonus.get("amount", 0) > 0:
-        if bonus["amount"] >= price:
-            bonus_used = price
-        else:
-            bonus_used = bonus["amount"]
-
-    remaining_cost = round(price - bonus_used, 4)
+    bonus_used, remaining_cost = compute_bonus_usage(bonus, proxy_pid, price)
 
     if balance < remaining_cost:
         await state.clear()
@@ -5615,6 +5599,12 @@ async def admin_user_action(message: Message, state: FSMContext):
         return
     if message.text == BTN_ADD_BONUS:
         await state.set_state(AdminFlow.user_bonus_amount)
+        current_bonus = await get_bonus(uid)
+        if current_bonus["amount"] > 0:
+            await message.answer(
+                f"⚠️ User already has a bonus: <b>${current_bonus['amount']:.2f}</b>\n"
+                f"Setting a new bonus will replace it."
+            )
         await message.answer(f"🎁 Enter bonus amount (USD) for <code>{uid}</code>:", reply_markup=input_kb())
         return
     await message.answer("❌ Select from keyboard.")
@@ -5689,6 +5679,9 @@ async def admin_bonus_amount(message: Message, state: FSMContext):
     if err:
         await message.answer(err)
         return
+    if amount <= 0:
+        await message.answer("❌ Bonus amount must be greater than 0.")
+        return
     await state.update_data(bonus_amount=amount, bonus_selected_products=[])
     products = await get_all_products()
     if not products:
@@ -5762,12 +5755,17 @@ async def admin_bonus_done(call: CallbackQuery, state: FSMContext):
     if not selected:
         await call.answer("Please select at least one product.", show_alert=True)
         return
-    await set_bonus(uid, amount, selected)
+    # Validate that selected product IDs still exist
+    products = await get_all_products()
+    valid_selected = [p for p in selected if p in products]
+    if not valid_selected:
+        await call.answer("Selected products no longer exist. Please re-select.", show_alert=True)
+        return
+    await set_bonus(uid, amount, valid_selected)
     updated = await get_user(uid)
     await state.update_data(target_user=updated)
     await state.set_state(AdminFlow.user_detail)
-    products = await get_all_products()
-    prod_names = [products[p]["name"] for p in selected if p in products]
+    prod_names = [products[p]["name"] for p in valid_selected if p in products]
     await call.message.edit_text(
         f"✅ Bonus set!\n"
         f"🎁 Amount: <b>${amount:.2f}</b>\n"
