@@ -613,6 +613,7 @@ BTN_BAN_USER    = _b("🚫 Ban User")
 BTN_UNBAN_USER  = _b("✅ Unban User")
 BTN_ADD_BAL     = _b("💰 Add Balance")
 BTN_REMOVE_BAL  = _b("💸 Remove Balance")
+BTN_ADD_BONUS   = _b("🎁 Add Bonus")
 
 # ── Admin coupon actions ───────────────────────────────────────────
 BTN_DELETE_COUPON = _b("🗑 Delete Coupon")
@@ -717,6 +718,39 @@ async def update_balance(uid: int, delta: float) -> float:
 async def ban_user(uid: int, banned: bool) -> None:
     await db_update(f"users/{uid}", {"is_banned": banned})
 
+
+async def get_bonus(uid: int) -> dict:
+    bonus = await db_get(f"users/{uid}/bonus")
+    if not bonus:
+        return {"amount": 0.0, "allowed_products": []}
+    return {
+        "amount": bonus.get("amount", 0.0),
+        "allowed_products": bonus.get("allowed_products", []),
+    }
+
+
+async def set_bonus(uid: int, amount: float, allowed_products: list) -> None:
+    await db_set(f"users/{uid}/bonus", {"amount": amount, "allowed_products": allowed_products})
+
+
+async def use_bonus(uid: int, amount: float) -> float:
+    bonus = await get_bonus(uid)
+    new_amount = round(max(bonus["amount"] - amount, 0), 4)
+    await db_update(f"users/{uid}/bonus", {"amount": new_amount})
+    return new_amount
+
+
+def compute_bonus_usage(bonus: dict, pid: str, total: float) -> tuple:
+    """Return (bonus_used, remaining_cost) for a purchase."""
+    bonus_used = 0.0
+    if pid in bonus.get("allowed_products", []) and bonus.get("amount", 0) > 0:
+        if bonus["amount"] >= total:
+            bonus_used = total
+        else:
+            bonus_used = bonus["amount"]
+    remaining_cost = round(total - bonus_used, 4)
+    return bonus_used, remaining_cost
+
 async def get_totp_secret(uid: int) -> Optional[str]:
     user = await get_user(uid)
     return user.get("totp_secret") if user else None
@@ -799,7 +833,11 @@ async def add_stock_items(pid: str, items: List[str]) -> int:
             existing[uuid.uuid4().hex[:16]] = cleaned
     await db_set(f"stocks/{pid}", existing)
     count = len(existing)
-    await db_update(f"products/{pid}", {"stock_count": count, "hidden": count == 0})
+    # Only auto-unhide if product was hidden due to empty stock (before == 0)
+    update_data = {"stock_count": count}
+    if before == 0 and count > 0:
+        update_data["hidden"] = False
+    await db_update(f"products/{pid}", update_data)
     return count - before  # Return actually added count, not total
 
 async def pop_stock_items(pid: str, qty: int) -> List[str]:
@@ -1078,9 +1116,15 @@ def parse_stock_file(content: bytes, filename: str) -> List[str]:
             if ws is None:
                 logger.warning("XLSX: no active sheet found")
                 return []
+            first_row = True
             for row in ws.iter_rows(values_only=True):
                 # FIX: filter None, convert to str, strip whitespace
                 cols = [str(c).strip() for c in row if c is not None and str(c).strip() not in ("", "None")]
+                # Skip header row
+                if first_row:
+                    first_row = False
+                    if any(c.lower() in ("email", "password", "account", "mail", "#", "no.", "number", "pass", "username", "login") for c in cols):
+                        continue
                 if len(cols) >= 2:
                     items.append(f"{cols[0]}:{cols[1]}")
                 elif len(cols) == 1:
@@ -1097,12 +1141,18 @@ def parse_stock_file(content: bytes, filename: str) -> List[str]:
             text = content.decode("utf-8-sig", errors="replace")  # FIX: handle BOM
         except Exception:
             text = content.decode("latin-1", errors="replace")
+        first_row = True
         for line in text.splitlines():
             line = line.strip()
             if not line:
                 continue
             parts = [p.strip() for p in line.split(",")]
             parts = [p for p in parts if p]
+            # Skip header row
+            if first_row:
+                first_row = False
+                if any(p.lower() in ("email", "password", "account", "mail", "#", "no.", "number", "pass", "username", "login") for p in parts):
+                    continue
             if len(parts) >= 2:
                 items.append(f"{parts[0]}:{parts[1]}")
             elif len(parts) == 1:
@@ -1114,7 +1164,20 @@ def parse_stock_file(content: bytes, filename: str) -> List[str]:
         text = content.decode("utf-8-sig", errors="replace")
     except Exception:
         text = content.decode("latin-1", errors="replace")
-    return [_norm(ln) for ln in text.splitlines() if _norm(ln)]
+    _header_kw = ("email", "password", "account", "mail", "#", "no.", "number", "pass", "username", "login")
+    items = []
+    first_row = True
+    for ln in text.splitlines():
+        normed = _norm(ln)
+        if not normed:
+            continue
+        if first_row:
+            first_row = False
+            parts = [p.strip().lower() for p in normed.replace(":", ",").split(",") if p.strip()]
+            if any(p in _header_kw for p in parts):
+                continue
+        items.append(normed)
+    return items
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1331,6 +1394,10 @@ def fmt_welcome(shop_name: str, welcome: str, first_name: str, balance: float) -
 
 def fmt_balance_screen(user: dict) -> str:
     banned = "🚫 Banned" if user.get("is_banned") else "✅ Active"
+    bonus = user.get("bonus")
+    bonus_line = ""
+    if bonus and bonus.get("amount", 0) > 0:
+        bonus_line = f"🎁 Bonus Balance: <b>${bonus['amount']:.2f}</b>\n"
     return (
         f"💰 <b>My Balance</b>\n{_SEP}\n"
         f"👤 <b>{user.get('full_name', 'User')}</b>\n"
@@ -1338,6 +1405,7 @@ def fmt_balance_screen(user: dict) -> str:
         f"📛 @{user.get('username') or 'no username'}\n"
         f"{_LINE}\n"
         f"💵 Balance: <b>${user.get('balance', 0):.2f}</b>\n"
+        f"{bonus_line}"
         f"💸 Total Spent: <b>${user.get('total_spent', 0):.2f}</b>\n"
         f"🛍 Total Orders: <b>{user.get('order_count', 0)}</b>\n"
         f"📅 Member Since: {_dt(user.get('joined_at', int(time.time())))}\n"
@@ -1542,12 +1610,20 @@ def fmt_admin_proxy_order(o: dict) -> str:
 
 def fmt_user_info(user: dict) -> str:
     banned = "🚫 Banned" if user.get("is_banned") else "✅ Active"
+    bonus = user.get("bonus")
+    bonus_line = ""
+    if bonus and bonus.get("amount", 0) > 0:
+        bonus_line = (
+            f"🎁 Bonus: <b>${bonus['amount']:.2f}</b> "
+            f"({len(bonus.get('allowed_products', []))} product(s))\n"
+        )
     return (
         f"👤 <b>User Profile</b>\n{_SEP}\n"
         f"🆔 <code>{user['user_id']}</code>\n"
         f"👤 @{user.get('username', '—')}\n"
         f"📛 {user.get('full_name', '—')}\n"
         f"💰 Balance: <b>${user.get('balance', 0):.2f}</b>\n"
+        f"{bonus_line}"
         f"💸 Spent: <b>${user.get('total_spent', 0):.2f}</b>\n"
         f"🛍 Orders: <b>{user.get('order_count', 0)}</b>\n"
         f"📅 Joined: {_dt(user.get('joined_at', 0))}\n"
@@ -1702,6 +1778,8 @@ class AdminFlow(StatesGroup):
     user_detail       = State()
     user_add_bal      = State()
     user_remove_bal   = State()
+    user_bonus_amount = State()
+    user_bonus_products = State()
     coupons_list      = State()
     coupon_detail     = State()
     coupon_code       = State()
@@ -1966,6 +2044,7 @@ def admin_user_actions_kb(is_banned: bool) -> ReplyKeyboardMarkup:
     return _kb(
         [ban_btn],
         [BTN_ADD_BAL, BTN_REMOVE_BAL],
+        [BTN_ADD_BONUS],
         [BACK_BTN, HOME_BTN],
     )
 
@@ -2161,6 +2240,12 @@ router_global = Router()
 
 @router_global.message(F.text == HOME_BTN)
 async def go_home(message: Message, state: FSMContext):
+    # If admin is in admin flow, send them to admin panel instead
+    current_state = await state.get_state()
+    if is_admin(message.from_user.id) and current_state and current_state.startswith("AdminFlow:"):
+        await state.set_state(AdminFlow.menu)
+        await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+        return
     await send_main_menu(message, state)
 
 
@@ -2982,13 +3067,18 @@ async def mail_confirm(message: Message, state: FSMContext):
     user    = await get_user(uid) or {}
     balance = user.get("balance", 0)
 
-    if balance < total:
+    # ── Bonus logic ──
+    bonus = await get_bonus(uid)
+    bonus_used, remaining_cost = compute_bonus_usage(bonus, pid, total)
+
+    if balance < remaining_cost:
         await state.clear()
         await message.answer(
             f"❌ <b>Insufficient Balance</b>\n{_SEP}\n"
             f"💵 Required: <b>${total:.2f}</b>\n"
-            f"💰 Your Balance: <b>${balance:.2f}</b>\n"
-            f"Shortfall: <b>${total - balance:.2f}</b>\n\nPlease deposit to continue.",
+            + (f"🎁 Bonus Applied: <b>${bonus_used:.2f}</b>\n" if bonus_used > 0 else "")
+            + f"💰 Your Balance: <b>${balance:.2f}</b>\n"
+            f"Shortfall: <b>${remaining_cost - balance:.2f}</b>\n\nPlease deposit to continue.",
             reply_markup=main_menu_kb(),
         )
         return
@@ -3001,7 +3091,10 @@ async def mail_confirm(message: Message, state: FSMContext):
         )
         return
     items   = await pop_stock_items(pid, qty)
-    new_bal = await update_balance(uid, -total)
+    # Deduct bonus first, then regular balance for remainder
+    if bonus_used > 0:
+        await use_bonus(uid, bonus_used)
+    new_bal = await update_balance(uid, -remaining_cost)
     oid     = await create_order(uid, pid, product["name"], qty, total, items)
     if data.get("coupon_id"):
         await use_coupon(data["coupon_id"])
@@ -3012,7 +3105,8 @@ async def mail_confirm(message: Message, state: FSMContext):
     except Exception as _e:
         logger.warning("Mail shop file append failed: %s", _e)
     await state.clear()
-    await message.answer(fmt_order_receipt(oid, product["name"], qty, total, items, new_bal), reply_markup=main_menu_kb())
+    bonus_note = f"\n🎁 Paid from Bonus: <b>${bonus_used:.2f}</b>" if bonus_used > 0 else ""
+    await message.answer(fmt_order_receipt(oid, product["name"], qty, total, items, new_bal) + bonus_note, reply_markup=main_menu_kb())
 
     # ── Auto-set mail session when exactly 1 item is purchased ────────
     if qty == 1 and items:
@@ -3377,19 +3471,30 @@ async def vpn_confirm(message: Message, state: FSMContext):
         return
     uid     = message.from_user.id
     user    = await get_user(uid) or {}
-    if (user.get("balance") or 0) < price:
+    balance = user.get("balance") or 0
+
+    # ── Bonus logic ──
+    bonus = await get_bonus(uid)
+    bonus_used, remaining_cost = compute_bonus_usage(bonus, vpn_pid, price)
+
+    if balance < remaining_cost:
         await state.clear()
         await message.answer(
-            f"❌ <b>Insufficient Balance</b>\n{_SEP}\nRequired: <b>${price:.2f}</b>  ·  Yours: <b>${user.get('balance',0):.2f}</b>",
+            f"❌ <b>Insufficient Balance</b>\n{_SEP}\nRequired: <b>${price:.2f}</b>"
+            + (f"  ·  🎁 Bonus: <b>${bonus_used:.2f}</b>" if bonus_used > 0 else "")
+            + f"  ·  Yours: <b>${balance:.2f}</b>",
             reply_markup=main_menu_kb(),
         )
         return
-    await update_balance(uid, -price)
+    if bonus_used > 0:
+        await use_bonus(uid, bonus_used)
+    await update_balance(uid, -remaining_cost)
     if data.get("vpn_coupon_id"):
         await use_coupon(data["vpn_coupon_id"])
     oid = await create_vpn_order(uid, user.get("username",""), vpn_pid, product["name"], days, price)
     await state.clear()
-    await message.answer(fmt_service_order_placed("🌐", "VPN", oid, product["name"], days, price), reply_markup=main_menu_kb())
+    bonus_note = f"\n🎁 Paid from Bonus: ${bonus_used:.2f}" if bonus_used > 0 else ""
+    await message.answer(fmt_service_order_placed("🌐", "VPN", oid, product["name"], days, price) + bonus_note, reply_markup=main_menu_kb())
     for adm in ADMIN_IDS:
         try:
             await message.bot.send_message(
@@ -3674,13 +3779,18 @@ async def proxy_auto_confirm(message: Message, state: FSMContext):
     user    = await get_user(uid) or {}
     balance = user.get("balance", 0)
 
-    if balance < total:
+    # ── Bonus logic ──
+    bonus = await get_bonus(uid)
+    bonus_used, remaining_cost = compute_bonus_usage(bonus, pid, total)
+
+    if balance < remaining_cost:
         await state.clear()
         await message.answer(
             f"❌ <b>Insufficient Balance</b>\n{_SEP}\n"
             f"💵 Required: <b>${total:.2f}</b>\n"
-            f"💰 Your Balance: <b>${balance:.2f}</b>\n"
-            f"Shortfall: <b>${total - balance:.2f}</b>\n\nPlease deposit to continue.",
+            + (f"🎁 Bonus Applied: <b>${bonus_used:.2f}</b>\n" if bonus_used > 0 else "")
+            + f"💰 Your Balance: <b>${balance:.2f}</b>\n"
+            f"Shortfall: <b>${remaining_cost - balance:.2f}</b>\n\nPlease deposit to continue.",
             reply_markup=main_menu_kb(),
         )
         return
@@ -3694,7 +3804,9 @@ async def proxy_auto_confirm(message: Message, state: FSMContext):
         return
 
     items   = await pop_stock_items(pid, qty)
-    new_bal = await update_balance(uid, -total)
+    if bonus_used > 0:
+        await use_bonus(uid, bonus_used)
+    new_bal = await update_balance(uid, -remaining_cost)
     if data.get("proxy_auto_coupon_id"):
         await use_coupon(data["proxy_auto_coupon_id"])
     oid     = await create_proxy_order(uid, user.get("username", ""), pid, product["name"], "Auto", total, items=items)
@@ -3702,12 +3814,13 @@ async def proxy_auto_confirm(message: Message, state: FSMContext):
 
     preview = "\n".join(items[:5])
     more    = f"\n<i>... and {len(items) - 5} more</i>" if len(items) > 5 else ""
+    bonus_note = f"\n🎁 Paid from Bonus: <b>${bonus_used:.2f}</b>" if bonus_used > 0 else ""
     await message.answer(
         f"✅ <b>Proxy Order Delivered!</b>\n{_SEP}\n"
         f"🆔 Order: <code>{oid[:12]}</code>\n"
         f"🔐 {product['name']} × {qty}\n"
         f"💵 Paid: <b>${total:.2f}</b>\n"
-        f"👛 Balance left: <b>${new_bal:.2f}</b>\n{_SEP}\n"
+        f"👛 Balance left: <b>${new_bal:.2f}</b>\n{bonus_note}{_SEP}\n"
         f"📋 <b>Your Proxies:</b>\n<code>{preview}{more}</code>",
         reply_markup=main_menu_kb(),
     )
@@ -3952,24 +4065,36 @@ async def proxy_confirm(message: Message, state: FSMContext):
         return
     uid     = message.from_user.id
     user    = await get_user(uid) or {}
-    if (user.get("balance") or 0) < price:
+    balance = user.get("balance") or 0
+    proxy_pid = data.get("proxy_pid", "")
+
+    # ── Bonus logic ──
+    bonus = await get_bonus(uid)
+    bonus_used, remaining_cost = compute_bonus_usage(bonus, proxy_pid, price)
+
+    if balance < remaining_cost:
         await state.clear()
         await message.answer(
-            f"❌ <b>Insufficient Balance</b>\n{_SEP}\nRequired: <b>${price:.2f}</b>  ·  Yours: <b>${user.get('balance',0):.2f}</b>",
+            f"❌ <b>Insufficient Balance</b>\n{_SEP}\nRequired: <b>${price:.2f}</b>"
+            + (f"  ·  🎁 Bonus: <b>${bonus_used:.2f}</b>" if bonus_used > 0 else "")
+            + f"  ·  Yours: <b>${balance:.2f}</b>",
             reply_markup=main_menu_kb(),
         )
         return
-    await update_balance(uid, -price)
+    if bonus_used > 0:
+        await use_bonus(uid, bonus_used)
+    await update_balance(uid, -remaining_cost)
     if data.get("proxy_coupon_id"):
         await use_coupon(data.get("proxy_coupon_id"))
-    oid = await create_proxy_order(uid, user.get("username",""), data.get("proxy_pid",""), product.get("name",""), days, price)
+    oid = await create_proxy_order(uid, user.get("username",""), proxy_pid, product.get("name",""), days, price)
     await state.clear()
+    bonus_note = f"\n🎁 Paid from Bonus: <b>${bonus_used:.2f}</b>" if bonus_used > 0 else ""
     await message.answer(
         f"🔐 <b>Proxy Order Placed!</b>\n{_SEP}\n"
         f"🆔 Order: <code>{oid[:12]}</code>\n"
         f"📦 {product['name']}\n"
         f"📡 Data: <b>{days}</b>\n"
-        f"💵 Paid: <b>${price:.2f}</b>\n{_SEP}\n"
+        f"💵 Paid: <b>${price:.2f}</b>\n{bonus_note}{_SEP}\n"
         f"⏳ Status: <b>Pending</b>\n"
         f"Our team will deliver your order shortly.\n"
         f"You'll receive a notification when ready. 🔔",
@@ -5472,6 +5597,16 @@ async def admin_user_action(message: Message, state: FSMContext):
         await state.set_state(AdminFlow.user_remove_bal)
         await message.answer(f"💸 Enter USD amount to remove from <code>{uid}</code>:", reply_markup=input_kb())
         return
+    if message.text == BTN_ADD_BONUS:
+        await state.set_state(AdminFlow.user_bonus_amount)
+        current_bonus = await get_bonus(uid)
+        if current_bonus["amount"] > 0:
+            await message.answer(
+                f"⚠️ User already has a bonus: <b>${current_bonus['amount']:.2f}</b>\n"
+                f"Setting a new bonus will replace it."
+            )
+        await message.answer(f"🎁 Enter bonus amount (USD) for <code>{uid}</code>:", reply_markup=input_kb())
+        return
     await message.answer("❌ Select from keyboard.")
 
 
@@ -5528,6 +5663,129 @@ async def admin_remove_bal(message: Message, state: FSMContext):
         f"✅ Removed <b>${amount:.2f}</b> → New Balance: <b>${new_bal:.2f}</b>",
         reply_markup=admin_user_actions_kb(updated.get("is_banned", False)),
     )
+
+
+# ── Admin Bonus ────────────────────────────────────────────────────
+
+@router_admin.message(AdminFlow.user_bonus_amount)
+async def admin_bonus_amount(message: Message, state: FSMContext):
+    if message.text in (CANCEL_BTN, BACK_BTN, HOME_BTN):
+        data = await state.get_data()
+        user = data.get("target_user", {})
+        await state.set_state(AdminFlow.user_detail)
+        await message.answer(fmt_user_info(user), reply_markup=admin_user_actions_kb(user.get("is_banned", False)))
+        return
+    amount, err = validate_price(message.text)
+    if err:
+        await message.answer(err)
+        return
+    if amount <= 0:
+        await message.answer("❌ Bonus amount must be greater than 0.")
+        return
+    await state.update_data(bonus_amount=amount, bonus_selected_products=[])
+    products = await get_all_products()
+    if not products:
+        await message.answer("❌ No products found. Add products first.")
+        data = await state.get_data()
+        user = data.get("target_user", {})
+        await state.set_state(AdminFlow.user_detail)
+        await message.answer(fmt_user_info(user), reply_markup=admin_user_actions_kb(user.get("is_banned", False)))
+        return
+    buttons = []
+    for pid, prod in products.items():
+        buttons.append([InlineKeyboardButton(
+            text=f"{prod.get('emoji', '📦')} {prod['name']}",
+            callback_data=f"bonus_prod:{pid}",
+        )])
+    buttons.append([InlineKeyboardButton(text="✅ Done", callback_data="bonus_done")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await state.set_state(AdminFlow.user_bonus_products)
+    await message.answer(
+        f"🎁 Bonus: <b>${amount:.2f}</b>\n\n"
+        f"Select which products this bonus can be used on:\n"
+        f"(Tap to toggle selection, then press Done)",
+        reply_markup=kb,
+    )
+
+
+@router_admin.callback_query(F.data.startswith("bonus_prod:"))
+async def admin_bonus_toggle_product(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("Not authorized", show_alert=True)
+        return
+    current_state = await state.get_state()
+    if current_state != AdminFlow.user_bonus_products.state:
+        await call.answer()
+        return
+    pid = call.data.split(":", 1)[1]
+    data = await state.get_data()
+    selected = data.get("bonus_selected_products", [])
+    if pid in selected:
+        selected.remove(pid)
+    else:
+        selected.append(pid)
+    await state.update_data(bonus_selected_products=selected)
+    products = await get_all_products()
+    buttons = []
+    for p_id, prod in products.items():
+        check = "✅ " if p_id in selected else ""
+        buttons.append([InlineKeyboardButton(
+            text=f"{check}{prod.get('emoji', '📦')} {prod['name']}",
+            callback_data=f"bonus_prod:{p_id}",
+        )])
+    buttons.append([InlineKeyboardButton(text="✅ Done", callback_data="bonus_done")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await call.message.edit_reply_markup(reply_markup=kb)
+    await call.answer()
+
+
+@router_admin.callback_query(F.data == "bonus_done")
+async def admin_bonus_done(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("Not authorized", show_alert=True)
+        return
+    current_state = await state.get_state()
+    if current_state != AdminFlow.user_bonus_products.state:
+        await call.answer()
+        return
+    data = await state.get_data()
+    uid = data.get("target_uid")
+    amount = data.get("bonus_amount", 0)
+    selected = data.get("bonus_selected_products", [])
+    if not selected:
+        await call.answer("Please select at least one product.", show_alert=True)
+        return
+    # Validate that selected product IDs still exist
+    products = await get_all_products()
+    valid_selected = [p for p in selected if p in products]
+    if not valid_selected:
+        await call.answer("Selected products no longer exist. Please re-select.", show_alert=True)
+        return
+    await set_bonus(uid, amount, valid_selected)
+    updated = await get_user(uid)
+    await state.update_data(target_user=updated)
+    await state.set_state(AdminFlow.user_detail)
+    prod_names = [products[p]["name"] for p in valid_selected if p in products]
+    await call.message.edit_text(
+        f"✅ Bonus set!\n"
+        f"🎁 Amount: <b>${amount:.2f}</b>\n"
+        f"📦 Products: {', '.join(prod_names)}"
+    )
+    await call.message.answer(
+        fmt_user_info(updated),
+        reply_markup=admin_user_actions_kb(updated.get("is_banned", False)),
+    )
+    try:
+        await call.bot.send_message(
+            uid,
+            f"🎁 <b>Bonus Added!</b>\n{_SEP}\n"
+            f"💵 Amount: <b>${amount:.2f}</b>\n"
+            f"📦 Eligible Products: {', '.join(prod_names)}\n\n"
+            f"Use this bonus to purchase the above products!",
+        )
+    except Exception:
+        pass
+    await call.answer()
 
 
 # ── Coupons ────────────────────────────────────────────────────────
