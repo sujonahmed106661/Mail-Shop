@@ -716,6 +716,7 @@ BTN_ADD_BONUS   = _b("🎁 Add Bonus")
 BTN_REMOVE_BONUS = _b("🗑 Remove Bonus")
 BTN_BONUS_ALL_USERS = _b("🎁 Bonus All Users")
 BTN_BONUS_TOP10 = _b("🏆 Bonus Top 10")
+BTN_SEARCH_USER = _b("🔍 Search User")
 
 # ── Admin coupon actions ───────────────────────────────────────────
 BTN_DELETE_COUPON = _b("🗑 Delete Coupon")
@@ -1899,6 +1900,7 @@ class AdminFlow(StatesGroup):
     stock_uploading   = State()
     stock_manual      = State()
     user_search       = State()
+    user_menu         = State()
     user_detail       = State()
     user_add_bal      = State()
     user_remove_bal   = State()
@@ -2176,6 +2178,12 @@ def admin_user_actions_kb(is_banned: bool) -> ReplyKeyboardMarkup:
         [ban_btn],
         [BTN_ADD_BAL, BTN_REMOVE_BAL],
         [BTN_ADD_BONUS, BTN_REMOVE_BONUS],
+        [BACK_BTN, HOME_BTN],
+    )
+
+def admin_users_menu_kb() -> ReplyKeyboardMarkup:
+    return _kb(
+        [BTN_SEARCH_USER],
         [BTN_BONUS_ALL_USERS, BTN_BONUS_TOP10],
         [BACK_BTN, HOME_BTN],
     )
@@ -5678,19 +5686,45 @@ async def receive_manual_stock(message: Message, state: FSMContext):
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_USERS)
 async def admin_users(message: Message, state: FSMContext):
     all_users = await get_all_users()
-    await state.set_state(AdminFlow.user_search)
+    await state.set_state(AdminFlow.user_menu)
     await message.answer(
         f"👥 <b>User Management</b>\n{_SEP}\n"
-        f"Total Users: <b>{len(all_users)}</b>\n\nEnter a Telegram User ID to look up:",
-        reply_markup=_kb([BACK_BTN, HOME_BTN]),
+        f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
+        reply_markup=admin_users_menu_kb(),
     )
+
+
+@router_admin.message(AdminFlow.user_menu)
+async def admin_user_menu(message: Message, state: FSMContext):
+    if message.text == BACK_BTN or message.text == HOME_BTN:
+        await state.set_state(AdminFlow.menu)
+        await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+        return
+    if message.text == BTN_SEARCH_USER:
+        await state.set_state(AdminFlow.user_search)
+        await message.answer("🔍 Enter a Telegram User ID to look up:", reply_markup=_kb([BACK_BTN, HOME_BTN]))
+        return
+    if message.text == BTN_BONUS_ALL_USERS:
+        await state.set_state(AdminFlow.bonus_all_amount)
+        await message.answer("🎁 <b>Bonus All Users</b>\n\nEnter bonus amount (USD):", reply_markup=input_kb())
+        return
+    if message.text == BTN_BONUS_TOP10:
+        await state.set_state(AdminFlow.bonus_top10_amount)
+        await message.answer("🏆 <b>Bonus Top 10 Active Users</b>\n\nEnter bonus amount (USD):", reply_markup=input_kb())
+        return
+    await message.answer("❌ Select from keyboard.")
 
 
 @router_admin.message(AdminFlow.user_search)
 async def admin_search_user(message: Message, state: FSMContext):
     if message.text in (BACK_BTN, HOME_BTN):
-        await state.set_state(AdminFlow.menu)
-        await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+        await state.set_state(AdminFlow.user_menu)
+        all_users = await get_all_users()
+        await message.answer(
+            f"👥 <b>User Management</b>\n{_SEP}\n"
+            f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
+            reply_markup=admin_users_menu_kb(),
+        )
         return
     try:
         uid = int(message.text.strip())
@@ -5720,8 +5754,13 @@ async def admin_user_action(message: Message, state: FSMContext):
     uid  = data.get("target_uid")
     user = data.get("target_user", {})
     if message.text == BACK_BTN:
-        await state.set_state(AdminFlow.user_search)
-        await message.answer("👥 Enter User ID:", reply_markup=_kb([BACK_BTN, HOME_BTN]))
+        await state.set_state(AdminFlow.user_menu)
+        all_users = await get_all_users()
+        await message.answer(
+            f"👥 <b>User Management</b>\n{_SEP}\n"
+            f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
+            reply_markup=admin_users_menu_kb(),
+        )
         return
     if message.text == HOME_BTN:
         await state.set_state(AdminFlow.menu)
@@ -5783,14 +5822,6 @@ async def admin_user_action(message: Message, state: FSMContext):
             )
         except Exception:
             pass
-        return
-    if message.text == BTN_BONUS_ALL_USERS:
-        await state.set_state(AdminFlow.bonus_all_amount)
-        await message.answer("🎁 <b>Bonus All Users</b>\n\nEnter bonus amount (USD):", reply_markup=input_kb())
-        return
-    if message.text == BTN_BONUS_TOP10:
-        await state.set_state(AdminFlow.bonus_top10_amount)
-        await message.answer("🏆 <b>Bonus Top 10 Active Users</b>\n\nEnter bonus amount (USD):", reply_markup=input_kb())
         return
     await message.answer("❌ Select from keyboard.")
 
@@ -5978,10 +6009,13 @@ async def admin_bonus_done(call: CallbackQuery, state: FSMContext):
 @router_admin.message(AdminFlow.bonus_all_amount)
 async def admin_bonus_all_amount(message: Message, state: FSMContext):
     if message.text in (CANCEL_BTN, BACK_BTN, HOME_BTN):
-        data = await state.get_data()
-        user = data.get("target_user", {})
-        await state.set_state(AdminFlow.user_detail)
-        await message.answer(fmt_user_info(user), reply_markup=admin_user_actions_kb(user.get("is_banned", False)))
+        await state.set_state(AdminFlow.user_menu)
+        all_users = await get_all_users()
+        await message.answer(
+            f"👥 <b>User Management</b>\n{_SEP}\n"
+            f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
+            reply_markup=admin_users_menu_kb(),
+        )
         return
     amount, err = validate_price(message.text)
     if err:
@@ -5994,10 +6028,13 @@ async def admin_bonus_all_amount(message: Message, state: FSMContext):
     products = await get_all_products()
     if not products:
         await message.answer("❌ No products found. Add products first.")
-        data = await state.get_data()
-        user = data.get("target_user", {})
-        await state.set_state(AdminFlow.user_detail)
-        await message.answer(fmt_user_info(user), reply_markup=admin_user_actions_kb(user.get("is_banned", False)))
+        await state.set_state(AdminFlow.user_menu)
+        all_users = await get_all_users()
+        await message.answer(
+            f"👥 <b>User Management</b>\n{_SEP}\n"
+            f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
+            reply_markup=admin_users_menu_kb(),
+        )
         return
     buttons = []
     for pid, prod in products.items():
@@ -6095,16 +6132,13 @@ async def admin_bonusall_done(call: CallbackQuery, state: FSMContext):
         f"🎁 Amount: <b>${amount:.2f}</b>\n"
         f"📦 Products: {', '.join(prod_names)}"
     )
-    user = data.get("target_user", {})
-    if not user:
-        await state.set_state(AdminFlow.menu)
-        await call.message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
-    else:
-        await state.set_state(AdminFlow.user_detail)
-        await call.message.answer(
-            fmt_user_info(user),
-            reply_markup=admin_user_actions_kb(user.get("is_banned", False)),
-        )
+    await state.set_state(AdminFlow.user_menu)
+    all_users = await get_all_users()
+    await call.message.answer(
+        f"👥 <b>User Management</b>\n{_SEP}\n"
+        f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
+        reply_markup=admin_users_menu_kb(),
+    )
 
 
 # ── Bonus Top 10 ──────────────────────────────────────────────────
@@ -6112,10 +6146,13 @@ async def admin_bonusall_done(call: CallbackQuery, state: FSMContext):
 @router_admin.message(AdminFlow.bonus_top10_amount)
 async def admin_bonus_top10_amount(message: Message, state: FSMContext):
     if message.text in (CANCEL_BTN, BACK_BTN, HOME_BTN):
-        data = await state.get_data()
-        user = data.get("target_user", {})
-        await state.set_state(AdminFlow.user_detail)
-        await message.answer(fmt_user_info(user), reply_markup=admin_user_actions_kb(user.get("is_banned", False)))
+        await state.set_state(AdminFlow.user_menu)
+        all_users = await get_all_users()
+        await message.answer(
+            f"👥 <b>User Management</b>\n{_SEP}\n"
+            f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
+            reply_markup=admin_users_menu_kb(),
+        )
         return
     amount, err = validate_price(message.text)
     if err:
@@ -6128,10 +6165,13 @@ async def admin_bonus_top10_amount(message: Message, state: FSMContext):
     products = await get_all_products()
     if not products:
         await message.answer("❌ No products found. Add products first.")
-        data = await state.get_data()
-        user = data.get("target_user", {})
-        await state.set_state(AdminFlow.user_detail)
-        await message.answer(fmt_user_info(user), reply_markup=admin_user_actions_kb(user.get("is_banned", False)))
+        await state.set_state(AdminFlow.user_menu)
+        all_users = await get_all_users()
+        await message.answer(
+            f"👥 <b>User Management</b>\n{_SEP}\n"
+            f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
+            reply_markup=admin_users_menu_kb(),
+        )
         return
     buttons = []
     for pid, prod in products.items():
@@ -6236,16 +6276,13 @@ async def admin_bonustop_done(call: CallbackQuery, state: FSMContext):
         f"🎁 Amount: <b>${amount:.2f}</b>\n"
         f"📦 Products: {', '.join(prod_names)}"
     )
-    user = data.get("target_user", {})
-    if not user:
-        await state.set_state(AdminFlow.menu)
-        await call.message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
-    else:
-        await state.set_state(AdminFlow.user_detail)
-        await call.message.answer(
-            fmt_user_info(user),
-            reply_markup=admin_user_actions_kb(user.get("is_banned", False)),
-        )
+    await state.set_state(AdminFlow.user_menu)
+    all_users = await get_all_users()
+    await call.message.answer(
+        f"👥 <b>User Management</b>\n{_SEP}\n"
+        f"Total Users: <b>{len(all_users)}</b>\n\nSelect an option:",
+        reply_markup=admin_users_menu_kb(),
+    )
 
 
 # ── Coupons ────────────────────────────────────────────────────────
