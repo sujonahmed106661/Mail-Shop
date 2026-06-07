@@ -799,7 +799,11 @@ async def add_stock_items(pid: str, items: List[str]) -> int:
             existing[uuid.uuid4().hex[:16]] = cleaned
     await db_set(f"stocks/{pid}", existing)
     count = len(existing)
-    await db_update(f"products/{pid}", {"stock_count": count, "hidden": count == 0})
+    # Only auto-unhide if product was hidden due to empty stock (before == 0)
+    update_data = {"stock_count": count}
+    if before == 0 and count > 0:
+        update_data["hidden"] = False
+    await db_update(f"products/{pid}", update_data)
     return count - before  # Return actually added count, not total
 
 async def pop_stock_items(pid: str, qty: int) -> List[str]:
@@ -1078,9 +1082,15 @@ def parse_stock_file(content: bytes, filename: str) -> List[str]:
             if ws is None:
                 logger.warning("XLSX: no active sheet found")
                 return []
+            first_row = True
             for row in ws.iter_rows(values_only=True):
                 # FIX: filter None, convert to str, strip whitespace
                 cols = [str(c).strip() for c in row if c is not None and str(c).strip() not in ("", "None")]
+                # Skip header row
+                if first_row:
+                    first_row = False
+                    if any(c.lower() in ("email", "password", "account", "mail", "#", "no.", "number", "pass", "no") for c in cols):
+                        continue
                 if len(cols) >= 2:
                     items.append(f"{cols[0]}:{cols[1]}")
                 elif len(cols) == 1:
@@ -1097,12 +1107,18 @@ def parse_stock_file(content: bytes, filename: str) -> List[str]:
             text = content.decode("utf-8-sig", errors="replace")  # FIX: handle BOM
         except Exception:
             text = content.decode("latin-1", errors="replace")
+        first_row = True
         for line in text.splitlines():
             line = line.strip()
             if not line:
                 continue
             parts = [p.strip() for p in line.split(",")]
             parts = [p for p in parts if p]
+            # Skip header row
+            if first_row:
+                first_row = False
+                if any(p.lower() in ("email", "password", "account", "mail", "#", "no.", "number", "pass", "no") for p in parts):
+                    continue
             if len(parts) >= 2:
                 items.append(f"{parts[0]}:{parts[1]}")
             elif len(parts) == 1:
@@ -2161,6 +2177,12 @@ router_global = Router()
 
 @router_global.message(F.text == HOME_BTN)
 async def go_home(message: Message, state: FSMContext):
+    # If admin is in admin flow, send them to admin panel instead
+    current_state = await state.get_state()
+    if is_admin(message.from_user.id) and current_state and current_state.startswith("AdminFlow:"):
+        await state.set_state(AdminFlow.menu)
+        await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+        return
     await send_main_menu(message, state)
 
 
