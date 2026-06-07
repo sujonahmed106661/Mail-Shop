@@ -638,26 +638,26 @@ BACK_BTN   = _b("🔙 Back")
 CANCEL_BTN = _b("❌ Cancel")
 
 # ── User menu ──────────────────────────────────────────────────────
-BTN_BALANCE  = _b("💰 Balance")
-BTN_GET_MAIL   = _b("📮 Get Mail")
-BTN_TEMP_MAIL  = _b("📧 Temp Mail")
-BTN_BUY_VPN  = _b("🌐 Buy VPN")
-BTN_BUY_PROXY= _b("🔐 Buy Proxy")
-BTN_DEPOSIT  = _b("💵 Deposit")
-BTN_GET_CODE = _b("🔓 Get Code")
-BTN_GET_2FA  = _b("🔑 Get 2FA")
+BTN_BALANCE  = _b("💎 Balance")
+BTN_GET_MAIL   = _b("📨 Get Mail")
+BTN_TEMP_MAIL  = _b("🕐 Temp Mail")
+BTN_BUY_VPN  = _b("🛡 Buy VPN")
+BTN_BUY_PROXY= _b("🌍 Buy Proxy")
+BTN_DEPOSIT  = _b("💳 Deposit")
+BTN_GET_CODE = _b("📲 Get Code")
+BTN_GET_2FA  = _b("🔐 Get 2FA")
 
 # ── Get Code Sub-menu ───────────────────────────────────────────────
 BTN_GC_SET_MAIL = _b("📧 Set Mail")
 BTN_GC_CODES    = _b("📬 Get Codes")
-BTN_GC_INBOX    = _b("📁 Read Inbox")
+BTN_GC_INBOX    = _b("📥 Read Inbox")
 BTN_GC_REFRESH  = _b("🔄 Refresh Inbox")
-BTN_GC_FILTER   = _b("🔍 Filter Mail")
+BTN_GC_FILTER   = _b("🎯 Filter Mail")
 BTN_GC_CHANGE   = _b("✏️ Change Mail")
-BTN_HISTORY  = _b("📜 Order History")
+BTN_HISTORY  = _b("📋 Order History")
 BTN_SUPPORT  = _b("🆘 Support")
 BTN_CONFIRM  = _b("✅ Confirm Purchase")
-BTN_COUPON   = _b("🎟 Apply Coupon")
+BTN_COUPON   = _b("🎫 Apply Coupon")
 
 # ── Duration ───────────────────────────────────────────────────────
 BTN_1DAY   = _b("⏱ 1 Day")
@@ -667,22 +667,22 @@ BTN_90DAYS = _b("⏱ 90 Days")
 BTN_CUSTOM = _b("⏱ Custom")
 
 # ── Deposit methods ────────────────────────────────────────────────
-BTN_BKASH   = _b("📱 bKash")
-BTN_NAGAD   = _b("📱 Nagad")
-BTN_BINANCE = _b("🔶 Binance")
+BTN_BKASH   = _b("🟢 bKash")
+BTN_NAGAD   = _b("🟠 Nagad")
+BTN_BINANCE = _b("🟡 Binance")
 
 # ── Admin menu ─────────────────────────────────────────────────────
 BTN_ADM_DASHBOARD     = _b("📊 Dashboard")
-BTN_ADM_PRODUCTS      = _b("📦 Products")
-BTN_ADM_STOCK         = _b("📥 Stock")
+BTN_ADM_PRODUCTS      = _b("🛒 Products")
+BTN_ADM_STOCK         = _b("📦 Stock")
 BTN_ADM_USERS         = _b("👥 Users")
-BTN_ADM_DEPOSITS      = _b("💳 Deposits")
-BTN_ADM_VPN_ORDERS    = _b("🌐 VPN Orders")
-BTN_ADM_PROXY_ORDERS  = _b("🔐 Proxy Orders")
-BTN_ADM_COUPONS       = _b("🎟 Coupons")
+BTN_ADM_DEPOSITS      = _b("💰 Deposits")
+BTN_ADM_VPN_ORDERS    = _b("🛡 VPN Orders")
+BTN_ADM_PROXY_ORDERS  = _b("🌍 Proxy Orders")
+BTN_ADM_COUPONS       = _b("🎫 Coupons")
 BTN_ADM_BROADCAST     = _b("📢 Broadcast")
 BTN_ADM_SETTINGS      = _b("⚙️ Settings")
-BTN_ADM_EXPORT        = _b("📋 Export Mail Orders")
+BTN_ADM_EXPORT        = _b("📤 Export Mail Orders")
 BTN_ADM_PROXY_PKGS    = _b("📡 Data Packages")
 BTN_PKG_ADD           = _b("➕ Add Package")
 
@@ -708,7 +708,7 @@ BTN_DOWNLOAD_STOCK     = _b("📥 Download Stock")
 BTN_DOWNLOAD_ALL_STOCK = _b("📦 Download All Stock")
 
 # ── Admin user actions ─────────────────────────────────────────────
-BTN_BAN_USER    = _b("🚫 Ban User")
+BTN_BAN_USER    = _b("⛔ Ban User")
 BTN_UNBAN_USER  = _b("✅ Unban User")
 BTN_ADD_BAL     = _b("💰 Add Balance")
 BTN_REMOVE_BAL  = _b("💸 Remove Balance")
@@ -1711,26 +1711,44 @@ def fmt_admin_proxy_order(o: dict) -> str:
         f"🕒 {_dt(o['created_at'])}"
     )
 
-def fmt_user_info(user: dict) -> str:
-    banned = "🚫 Banned" if user.get("is_banned") else "✅ Active"
+def fmt_user_info(user: dict, mail_orders: int = 0, vpn_orders: int = 0, proxy_orders: int = 0) -> str:
+    banned = "⛔ Banned" if user.get("is_banned") else "✅ Active"
     bonus = user.get("bonus")
-    bonus_line = ""
+    bonus_section = ""
     if bonus and bonus.get("amount", 0) > 0:
-        bonus_line = (
-            f"🎁 Bonus: <b>${bonus['amount']:.2f}</b> "
-            f"({len(bonus.get('allowed_products', []))} product(s))\n"
+        allowed = bonus.get("allowed_products", [])
+        prods = ", ".join(allowed) if allowed else "All"
+        bonus_section = (
+            f"\n<b>{'─' * 22}</b>\n"
+            f"🎁 <b>Bonus Info</b>\n"
+            f"   Amount: <b>${bonus['amount']:.2f}</b>\n"
+            f"   Products: <code>{prods}</code>\n"
+        )
+    order_section = ""
+    if mail_orders or vpn_orders or proxy_orders:
+        order_section = (
+            f"\n<b>{'─' * 22}</b>\n"
+            f"📊 <b>Order Breakdown</b>\n"
+            f"   📨 Mail: <b>{mail_orders}</b>\n"
+            f"   🛡 VPN: <b>{vpn_orders}</b>\n"
+            f"   🌍 Proxy: <b>{proxy_orders}</b>\n"
         )
     return (
         f"👤 <b>User Profile</b>\n{_SEP}\n"
-        f"🆔 <code>{user['user_id']}</code>\n"
-        f"👤 @{user.get('username', '—')}\n"
-        f"📛 {user.get('full_name', '—')}\n"
-        f"💰 Balance: <b>${user.get('balance', 0):.2f}</b>\n"
-        f"{bonus_line}"
-        f"💸 Spent: <b>${user.get('total_spent', 0):.2f}</b>\n"
-        f"🛍 Orders: <b>{user.get('order_count', 0)}</b>\n"
-        f"📅 Joined: {_dt(user.get('joined_at', 0))}\n"
-        f"Status: {banned}"
+        f"🆔 ID: <code>{user['user_id']}</code>\n"
+        f"👤 Username: @{user.get('username') or 'N/A'}\n"
+        f"📛 Name: {user.get('full_name') or 'N/A'}\n"
+        f"\n<b>{'─' * 22}</b>\n"
+        f"💎 <b>Financial</b>\n"
+        f"   Balance: <b>${user.get('balance', 0):.2f}</b>\n"
+        f"   Total Spent: <b>${user.get('total_spent', 0):.2f}</b>\n"
+        f"{bonus_section}"
+        f"\n<b>{'─' * 22}</b>\n"
+        f"📋 <b>Activity</b>\n"
+        f"   Orders: <b>{user.get('order_count', 0)}</b>\n"
+        f"   Joined: {_dt(user.get('joined_at', 0))}\n"
+        f"   Status: {banned}"
+        f"{order_section}"
     )
 
 def fmt_settings(s: dict) -> str:
@@ -1920,13 +1938,15 @@ def _kb(*rows, resize: bool = True, one_time: bool = False) -> ReplyKeyboardMark
 
 def main_menu_kb() -> ReplyKeyboardMarkup:
     return _kb(
-        [BTN_BALANCE,  BTN_GET_MAIL],
-        [BTN_BUY_VPN,  BTN_BUY_PROXY],
-        [BTN_DEPOSIT,  BTN_GET_CODE],
-        [BTN_GET_2FA,  BTN_HISTORY],
-        [BTN_TEMP_MAIL],
-        [BTN_SUPPORT],
+        [BTN_BALANCE,   BTN_DEPOSIT],
+        [BTN_GET_MAIL,  BTN_TEMP_MAIL],
+        [BTN_BUY_VPN,   BTN_BUY_PROXY],
+        [BTN_GET_CODE,  BTN_GET_2FA],
+        [BTN_HISTORY,   BTN_SUPPORT],
     )
+
+def banned_user_kb() -> ReplyKeyboardMarkup:
+    return _kb([BTN_SUPPORT])
 
 def _nav_row() -> List[str]:
     return [BACK_BTN, HOME_BTN]
@@ -2037,20 +2057,20 @@ DEPOSIT_MAP = {
 
 def deposit_method_kb() -> ReplyKeyboardMarkup:
     return _kb(
-        [BTN_BKASH, BTN_NAGAD],
+        [BTN_BKASH,   BTN_NAGAD],
         [BTN_BINANCE],
         [BACK_BTN, HOME_BTN],
     )
 
 def admin_main_kb() -> ReplyKeyboardMarkup:
     return _kb(
-        [BTN_ADM_DASHBOARD,    BTN_ADM_PRODUCTS],
-        [BTN_ADM_STOCK,        BTN_ADM_USERS],
-        [BTN_ADM_DEPOSITS,     BTN_ADM_VPN_ORDERS],
-        [BTN_ADM_PROXY_ORDERS, BTN_ADM_COUPONS],
-        [BTN_ADM_BROADCAST,    BTN_ADM_SETTINGS],
+        [BTN_ADM_DASHBOARD],
+        [BTN_ADM_PRODUCTS,     BTN_ADM_STOCK],
+        [BTN_ADM_USERS,        BTN_ADM_DEPOSITS],
+        [BTN_ADM_VPN_ORDERS,   BTN_ADM_PROXY_ORDERS],
+        [BTN_ADM_COUPONS,      BTN_ADM_BROADCAST],
         [BTN_ADM_PROXY_PKGS,   BTN_ADM_EXPORT],
-        [HOME_BTN],
+        [BTN_ADM_SETTINGS,     HOME_BTN],
     )
 
 def proxy_pkg_manage_kb(options: list) -> ReplyKeyboardMarkup:
@@ -2162,9 +2182,9 @@ def admin_user_actions_kb(is_banned: bool) -> ReplyKeyboardMarkup:
 
 def get_code_menu_kb() -> ReplyKeyboardMarkup:
     return _kb(
-        [BTN_GC_SET_MAIL,  BTN_GC_CODES],
-        [BTN_GC_INBOX,     BTN_GC_REFRESH],
-        [BTN_GC_FILTER,    BTN_GC_CHANGE],
+        [BTN_GC_SET_MAIL,  BTN_GC_CHANGE],
+        [BTN_GC_CODES,     BTN_GC_INBOX],
+        [BTN_GC_REFRESH,   BTN_GC_FILTER],
         [BACK_BTN, HOME_BTN],
     )
 
@@ -2262,13 +2282,16 @@ class AuthMiddleware(BaseMiddleware):
         data["db_user"] = db_user
 
         if db_user.get("is_banned") and not is_admin(user.id):
+            # Allow banned users to reach Support handler
+            if isinstance(event, Message) and event.text == BTN_SUPPORT:
+                return await handler(event, data)
             msg = (
                 "🚫 <b>Account Banned</b>\n\n"
                 "Your account has been banned from this shop.\n"
                 "Contact support if you think this is a mistake."
             )
             if isinstance(event, Message):
-                await event.answer(msg)
+                await event.answer(msg, reply_markup=banned_user_kb())
             elif isinstance(event, CallbackQuery):
                 await event.answer("🚫 Account banned.", show_alert=True)
             return
@@ -5678,9 +5701,17 @@ async def admin_search_user(message: Message, state: FSMContext):
     if not user:
         await message.answer("❌ User not found.")
         return
+    mail_orders, vpn_orders, proxy_orders = await asyncio.gather(
+        get_user_orders(uid),
+        get_user_vpn_orders(uid),
+        get_user_proxy_orders(uid),
+    )
     await state.update_data(target_uid=uid, target_user=user)
     await state.set_state(AdminFlow.user_detail)
-    await message.answer(fmt_user_info(user), reply_markup=admin_user_actions_kb(user.get("is_banned", False)))
+    await message.answer(
+        fmt_user_info(user, len(mail_orders), len(vpn_orders), len(proxy_orders)),
+        reply_markup=admin_user_actions_kb(user.get("is_banned", False)),
+    )
 
 
 @router_admin.message(AdminFlow.user_detail)
