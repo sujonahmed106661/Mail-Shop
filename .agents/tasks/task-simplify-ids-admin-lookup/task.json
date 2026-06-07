@@ -1,0 +1,7 @@
+{
+  "task_id": "task-simplify-ids-admin-lookup",
+  "task_description": "Simplify product and order IDs to human-friendly format (ORD-0001, PRD-001, VPN-0001, PXY-0001) using Firebase counters, and add admin order lookup by ID feature",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001"],
+  "blocked_reason": null
+}

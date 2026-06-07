@@ -1,0 +1,45 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Implement human-friendly ID generation system for orders and products, and add admin order lookup by ID",
+  "status": "in_progress",
+  "steps": [
+    "Step 1: Add a counter-based ID generator function. Create an async function `generate_id(prefix: str)` that reads a counter from Firebase at path `counters/{prefix}`, increments it atomically, and returns a human-friendly ID like `ORD-0001`, `PRD-001`, `VPN-0001`, `PXY-0001`. Use db_get and db_set on `counters/{prefix}` node. Place this in the 'FIREBASE - Generic helpers' section around line 790.",
+    "Step 2: Modify `create_product()` (line ~905) to use `generate_id('PRD')` as the product key instead of `db_push`. Store the product data at `products/{friendly_id}` using `db_set` instead of `db_push`. Return the friendly ID.",
+    "Step 3: Modify `create_order()` (line ~971) to use `generate_id('ORD')` as the order key. Store at `orders/{friendly_id}` using `db_set` instead of `db_push`. Return the friendly ID.",
+    "Step 4: Modify `create_vpn_order()` (line ~1003) to use `generate_id('VPN')` as the order key. Store at `vpn_orders/{friendly_id}` using `db_set` instead of `db_push`. Return the friendly ID.",
+    "Step 5: Modify `create_proxy_order()` (line ~1040) to use `generate_id('PXY')` as the order key. Store at `proxy_orders/{friendly_id}` using `db_set` instead of `db_push`. Return the friendly ID.",
+    "Step 6: Update `fmt_order_receipt()` (line ~1574) to show the full friendly order ID instead of `oid[:12]`. Since IDs are now short (like ORD-0001), just display the full oid.",
+    "Step 7: Update `fmt_service_order_placed()` to show full friendly order ID instead of `oid[:12]`.",
+    "Step 8: Update `fmt_order_history()` (line ~1638) to show the full order ID instead of `o['order_id'][:8]` since it is now short and readable.",
+    "Step 9: Update admin VPN/proxy order display in `fmt_admin_vpn_order()` and `fmt_admin_proxy_order()` to show full order ID (remove any truncation).",
+    "Step 10: Update the VPN fulfill prompt (line ~4923) that shows `oid[:12]` to show full oid.",
+    "Step 11: Add a new AdminFlow state `order_lookup` for admin order search.",
+    "Step 12: Add a new button `BTN_ADM_ORDER_LOOKUP = _b('🔍 Order Lookup')` in the admin button definitions section (around line 674).",
+    "Step 13: Add the new button to `admin_main_kb()` (line ~2069) - add it on a new row or alongside an existing button.",
+    "Step 14: Create an admin handler for `BTN_ADM_ORDER_LOOKUP` that sets state to `AdminFlow.order_lookup` and asks admin to enter an order ID.",
+    "Step 15: Create a handler for `AdminFlow.order_lookup` state that receives the order ID text, searches across `orders/`, `vpn_orders/`, and `proxy_orders/` collections, and displays full order details including: order type, user ID, username, product name, quantity/duration, price, items (if mail order), status, and creation date. If not found, show 'Order not found' message.",
+    "Step 16: In `make_user_order_xlsx()` (line ~353) the order_id parameter will now be a friendly ID, no changes needed since it just displays the string as-is.",
+    "Step 17: Verify no other places truncate or manipulate the order_id that would break with the new format."
+  ],
+  "acceptance_criteria": [
+    "New orders get IDs like ORD-0001, ORD-0002 etc (incrementing)",
+    "New VPN orders get IDs like VPN-0001",
+    "New proxy orders get IDs like PXY-0001",
+    "New products get IDs like PRD-001",
+    "Order receipts show the full human-friendly ID",
+    "Order history shows full human-friendly IDs",
+    "Admin can click 'Order Lookup' button in admin panel",
+    "Admin can enter any order ID (ORD-xxxx, VPN-xxxx, PXY-xxxx) and see full details",
+    "bot.py parses without syntax errors"
+  ],
+  "verification": [
+    "Run: python -c \"import ast; ast.parse(open('bot.py').read())\" to verify no syntax errors",
+    "Grep for 'generate_id' to confirm the new ID generator exists",
+    "Grep for 'order_lookup' to confirm admin lookup state exists",
+    "Grep for 'BTN_ADM_ORDER_LOOKUP' to confirm the button exists",
+    "Grep for 'ORD-' and 'PRD-' to confirm new ID format is used"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
