@@ -2282,6 +2282,9 @@ class AuthMiddleware(BaseMiddleware):
         data["db_user"] = db_user
 
         if db_user.get("is_banned") and not is_admin(user.id):
+            # Allow banned users to reach Support handler
+            if isinstance(event, Message) and event.text == BTN_SUPPORT:
+                return await handler(event, data)
             msg = (
                 "🚫 <b>Account Banned</b>\n\n"
                 "Your account has been banned from this shop.\n"
@@ -5698,9 +5701,11 @@ async def admin_search_user(message: Message, state: FSMContext):
     if not user:
         await message.answer("❌ User not found.")
         return
-    mail_orders = await get_user_orders(uid)
-    vpn_orders = await get_user_vpn_orders(uid)
-    proxy_orders = await get_user_proxy_orders(uid)
+    mail_orders, vpn_orders, proxy_orders = await asyncio.gather(
+        get_user_orders(uid),
+        get_user_vpn_orders(uid),
+        get_user_proxy_orders(uid),
+    )
     await state.update_data(target_uid=uid, target_user=user)
     await state.set_state(AdminFlow.user_detail)
     await message.answer(
