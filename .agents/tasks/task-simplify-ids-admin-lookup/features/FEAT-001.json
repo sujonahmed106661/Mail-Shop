@@ -41,5 +41,5 @@
     "Grep for 'ORD-' and 'PRD-' to confirm new ID format is used"
   ],
   "blocked_reason": null,
-  "findings": "All changes verified with AST parse. No remaining truncated IDs. Admin order lookup searches across orders/, vpn_orders/, and proxy_orders/ collections. Counter-based IDs stored at counters/{prefix} in Firebase."
+  "findings": "All changes verified with AST parse. Post-review fixes applied: (1) generate_id uses Firebase transaction() for atomic counter increment preventing race conditions, (2) admin order lookup validates input with regex ^[A-Z]{2,4}-\\d{3,4}$ before querying Firebase to prevent path injection, (3) prefix-aware routing (ORD->orders, VPN->vpn_orders, PXY->proxy_orders) reduces Firebase reads from 3 to 1 with fallback to sequential search for legacy IDs."
 }
