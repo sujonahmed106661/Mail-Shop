@@ -1,0 +1,16 @@
+{
+  "project_type": "Python Telegram bot using aiogram 3.x with Firebase Realtime DB",
+  "language": "Python",
+  "build_system": "pip with requirements.txt, deployed on Railway (Procfile)",
+  "test_framework": "None (no test files exist)",
+  "build_command": "python -c \"import ast; ast.parse(open('bot.py').read())\"",
+  "test_command": "python -c \"import ast; ast.parse(open('bot.py').read())\"",
+  "verification_instructions": "1. Run AST parse to verify syntax. 2. Check that all imports resolve. 3. Verify logic correctness by reading the code.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "pip install -r requirements.txt",
+  "environment_constraints": "INTEGRATIONS_ONLY network - cannot install packages or run bot. Use AST validation only.",
+  "contribution_requirements": "Single file bot.py, all code in one file",
+  "key_patterns": "Firebase CRUD via db_get/db_set/db_update/db_push/db_delete. All UI uses ReplyKeyboardMarkup via _kb() helper. Admin panel uses AdminFlow StatesGroup. Order IDs currently come from Firebase push (auto-generated keys like -NxAbCdEf). Products stored under 'products/' in Firebase with auto keys. Orders under 'orders/', 'vpn_orders/', 'proxy_orders/'.",
+  "relevant_files": ["bot.py"],
+  "directory_structure": "Single file project: bot.py (6800 lines), requirements.txt, Procfile, railway.toml"
+}

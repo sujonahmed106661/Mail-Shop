@@ -684,6 +684,7 @@ BTN_ADM_BROADCAST     = _b("📢 Broadcast")
 BTN_ADM_SETTINGS      = _b("⚙️ Settings")
 BTN_ADM_EXPORT        = _b("📤 Export Mail Orders")
 BTN_ADM_PROXY_PKGS    = _b("📡 Data Packages")
+BTN_ADM_ORDER_LOOKUP  = _b("🔍 Order Lookup")
 BTN_PKG_ADD           = _b("➕ Add Package")
 
 # ── Admin product actions ──────────────────────────────────────────
@@ -787,6 +788,15 @@ async def db_push(path: str, data: Any) -> str:
 
 async def db_delete(path: str) -> None:
     await _run(fdb.reference(path).delete)
+
+
+async def generate_id(prefix: str) -> str:
+    """Generate a human-friendly incrementing ID like ORD-0001, PRD-001."""
+    ref = fdb.reference(f"counters/{prefix}")
+    new_val = await _run(ref.transaction, lambda current: (current or 0) + 1)
+    if prefix == "PRD":
+        return f"{prefix}-{new_val:03d}"
+    return f"{prefix}-{new_val:04d}"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -905,11 +915,13 @@ async def get_product(pid: str) -> Optional[dict]:
 async def create_product(name: str, price: float, emoji: str = "📮", category: str = "mail",
                          delivery_mode: str = "manual", hidden: bool = False,
                          description: str = "") -> str:
-    return await db_push("products", {
+    pid = await generate_id("PRD")
+    await db_set(f"products/{pid}", {
         "name": name, "price": price, "emoji": emoji, "category": category,
         "delivery_mode": delivery_mode, "hidden": hidden, "description": description,
         "stock_count": 0, "created_at": int(time.time()), "total_sold": 0,
     })
+    return pid
 
 async def update_product(pid: str, updates: dict) -> None:
     await db_update(f"products/{pid}", updates)
@@ -970,7 +982,8 @@ async def get_stock_count(pid: str) -> int:
 
 async def create_order(uid: int, pid: str, product_name: str,
                        qty: int, total_price: float, items: List[str]) -> str:
-    oid = await db_push("orders", {
+    oid = await generate_id("ORD")
+    await db_set(f"orders/{oid}", {
         "user_id": uid, "product_id": pid, "product_name": product_name,
         "qty": qty, "total_price": total_price, "items": items,
         "status": "delivered", "created_at": int(time.time()),
@@ -1011,11 +1024,13 @@ async def create_vpn_order(uid: int, username: str, pid: str,
     await db_update(f"products/{pid}", {
         "total_sold": (prod.get("total_sold") or 0) + 1,
     })
-    return await db_push("vpn_orders", {
+    oid = await generate_id("VPN")
+    await db_set(f"vpn_orders/{oid}", {
         "user_id": uid, "username": username, "product_id": pid,
         "product_name": product_name, "duration_days": duration_days,
         "price": price, "status": "pending", "created_at": int(time.time()),
     })
+    return oid
 
 async def update_vpn_order(oid: str, updates: dict) -> None:
     await db_update(f"vpn_orders/{oid}", updates)
@@ -1054,12 +1069,14 @@ async def create_proxy_order(uid: int, username: str, pid: str,
     await db_update(f"products/{pid}", {
         "total_sold": (prod.get("total_sold") or 0) + 1,
     })
-    return await db_push("proxy_orders", {
+    oid = await generate_id("PXY")
+    await db_set(f"proxy_orders/{oid}", {
         "user_id": uid, "username": username, "product_id": pid,
         "product_name": product_name, "duration_days": duration_days,
         "price": price, "status": status, "delivery_mode": delivery_mode,
         "items": items or [], "created_at": int(time.time()),
     })
+    return oid
 
 async def update_proxy_order(oid: str, updates: dict) -> None:
     await db_update(f"proxy_orders/{oid}", updates)
@@ -1577,7 +1594,7 @@ def fmt_order_receipt(oid: str, product_name: str, qty: int,
     more = f"\n<i>... and {len(items) - 5} more</i>" if len(items) > 5 else ""
     return (
         f"✅ <b>Order Successful!</b>\n{_SEP}\n"
-        f"🆔 Order: <code>{oid[:12]}</code>\n"
+        f"🆔 Order: <code>{oid}</code>\n"
         f"📦 {product_name} × {qty}\n"
         f"💵 Paid: <b>${total:.2f}</b>\n"
         f"👛 Balance left: <b>${new_balance:.2f}</b>\n{_SEP}\n"
@@ -1589,7 +1606,7 @@ def fmt_service_order_placed(cat_emoji: str, cat_name: str,
                               oid: str, product_name: str, days: int, price: float) -> str:
     return (
         f"{cat_emoji} <b>{cat_name} Order Placed!</b>\n{_SEP}\n"
-        f"🆔 Order: <code>{oid[:12]}</code>\n"
+        f"🆔 Order: <code>{oid}</code>\n"
         f"📦 {product_name}\n"
         f"⏱ Duration: <b>{days} day(s)</b>\n"
         f"💵 Paid: <b>${price:.2f}</b>\n{_SEP}\n"
@@ -1645,18 +1662,18 @@ def fmt_order_history(orders: list, vpn: list, proxy: list) -> str:
     if orders:
         lines.append("📮 <b>Mail Orders</b>")
         for o in orders[:8]:
-            lines.append(f"  <code>{o['order_id'][:8]}</code>  {o['product_name']} ×{o['qty']}  ${o['total_price']:.2f}")
+            lines.append(f"  <code>{o['order_id']}</code>  {o['product_name']} ×{o['qty']}  ${o['total_price']:.2f}")
     if vpn:
         lines.append("\n🌐 <b>VPN Orders</b>")
         for o in vpn[:8]:
             s = {"delivered": "✅", "cancelled": "❌"}.get(o["status"], "⏳")
-            lines.append(f"  <code>{o['order_id'][:8]}</code>  {o['product_name']} {o['duration_days']}d  ${o['price']:.2f}  {s}")
+            lines.append(f"  <code>{o['order_id']}</code>  {o['product_name']} {o['duration_days']}d  ${o['price']:.2f}  {s}")
     if proxy:
         lines.append("\n🔐 <b>Proxy Orders</b>")
         for o in proxy[:8]:
             s = {"delivered": "✅", "cancelled": "❌"}.get(o["status"], "⏳")
             data_lbl = o.get("duration_days", "—")
-            lines.append(f"  <code>{o['order_id'][:8]}</code>  {o['product_name']} {data_lbl}  ${o['price']:.2f}  {s}")
+            lines.append(f"  <code>{o['order_id']}</code>  {o['product_name']} {data_lbl}  ${o['price']:.2f}  {s}")
     return "\n".join(lines)
 
 def fmt_deposit_history(deposits: list) -> str:
@@ -1927,6 +1944,7 @@ class AdminFlow(StatesGroup):
     bonus_top10_products = State()
     proxy_pkg_list    = State()
     proxy_pkg_add     = State()
+    order_lookup      = State()
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2074,7 +2092,8 @@ def admin_main_kb() -> ReplyKeyboardMarkup:
         [BTN_ADM_VPN_ORDERS,   BTN_ADM_PROXY_ORDERS],
         [BTN_ADM_COUPONS,      BTN_ADM_BROADCAST],
         [BTN_ADM_PROXY_PKGS,   BTN_ADM_EXPORT],
-        [BTN_ADM_SETTINGS,     HOME_BTN],
+        [BTN_ADM_ORDER_LOOKUP, BTN_ADM_SETTINGS],
+        [HOME_BTN],
     )
 
 def proxy_pkg_manage_kb(options: list) -> ReplyKeyboardMarkup:
@@ -3399,13 +3418,13 @@ async def mail_confirm(message: Message, state: FSMContext):
     try:
         xlsx_bytes = make_user_order_xlsx(oid, product["name"], qty, total, items)
         date_str   = time.strftime("%Y%m%d_%H%M", time.gmtime())
-        filename   = f"order_{oid[:8]}_{date_str}.xlsx"
+        filename   = f"order_{oid}_{date_str}.xlsx"
         await message.answer_document(
             document=BufferedInputFile(xlsx_bytes, filename=filename),
             caption=(
                 f"📋 <b>Your Accounts File</b>\n{_SEP}\n"
                 f"📦 {product['name']} × {qty}\n"
-                f"🆔 Order: <code>{oid[:12]}</code>\n\n"
+                f"🆔 Order: <code>{oid}</code>\n\n"
                 f"<i>Open this file to see all your accounts.</i>"
             ),
         )
@@ -4012,7 +4031,7 @@ async def proxy_auto_confirm(message: Message, state: FSMContext):
     bonus_note = f"\n🎁 Paid from Bonus: <b>${bonus_used:.2f}</b>" if bonus_used > 0 else ""
     await message.answer(
         f"✅ <b>Proxy Order Delivered!</b>\n{_SEP}\n"
-        f"🆔 Order: <code>{oid[:12]}</code>\n"
+        f"🆔 Order: <code>{oid}</code>\n"
         f"🔐 {product['name']} × {qty}\n"
         f"💵 Paid: <b>${total:.2f}</b>\n"
         f"👛 Balance left: <b>${new_bal:.2f}</b>\n{bonus_note}{_SEP}\n"
@@ -4024,13 +4043,13 @@ async def proxy_auto_confirm(message: Message, state: FSMContext):
     try:
         xlsx_bytes = make_user_order_xlsx(oid, product["name"], qty, total, items)
         date_str = time.strftime("%Y%m%d_%H%M", time.gmtime())
-        filename = f"order_{oid[:8]}_{date_str}.xlsx"
+        filename = f"order_{oid}_{date_str}.xlsx"
         await message.answer_document(
             document=BufferedInputFile(xlsx_bytes, filename=filename),
             caption=(
                 f"📋 <b>Your Proxies File</b>\n{_SEP}\n"
                 f"🔐 {product['name']} \u00d7 {qty}\n"
-                f"🆔 Order: <code>{oid[:12]}</code>\n\n"
+                f"🆔 Order: <code>{oid}</code>\n\n"
                 f"<i>Open this file to see all your proxy details.</i>"
             ),
         )
@@ -4288,7 +4307,7 @@ async def proxy_confirm(message: Message, state: FSMContext):
     bonus_note = f"\n🎁 Paid from Bonus: <b>${bonus_used:.2f}</b>" if bonus_used > 0 else ""
     await message.answer(
         f"🔐 <b>Proxy Order Placed!</b>\n{_SEP}\n"
-        f"🆔 Order: <code>{oid[:12]}</code>\n"
+        f"🆔 Order: <code>{oid}</code>\n"
         f"📦 {product['name']}\n"
         f"📡 Data: <b>{days}</b>\n"
         f"💵 Paid: <b>${price:.2f}</b>\n{bonus_note}{_SEP}\n"
@@ -4920,7 +4939,7 @@ async def deliver_vpn(call: CallbackQuery, state: FSMContext):
     await call.answer("📝 Enter credentials now")
     await call.message.answer(
         f"📝 <b>VPN Credentials</b>\n{_SEP}\n"
-        f"Order: <code>{oid[:12]}</code>\n"
+        f"Order: <code>{oid}</code>\n"
         f"Product: <b>{o['product_name']}</b>  ·  {o['duration_days']} days\n\n"
         f"✏️ <b>Type the credentials to send to the user:</b>\n"
         f"<i>(e.g. username, password, server info)</i>\n\n"
@@ -4985,7 +5004,7 @@ async def deliver_proxy(call: CallbackQuery, state: FSMContext):
     await call.answer("📝 Enter credentials now")
     await call.message.answer(
         f"📝 <b>Proxy Credentials</b>\n{_SEP}\n"
-        f"Order: <code>{oid[:12]}</code>\n"
+        f"Order: <code>{oid}</code>\n"
         f"Product: <b>{o['product_name']}</b>  ·  📡 {o.get('duration_days', '—')}\n\n"
         f"✏️ <b>Type the proxy details to send to the user:</b>\n"
         f"<i>(e.g. IP:Port, username, password)</i>\n\n"
@@ -6418,6 +6437,168 @@ async def _back_to_coupons(message: Message, state: FSMContext):
     await state.update_data(coupons=coupons, coupons_dm=dm)
     await state.set_state(AdminFlow.coupons_list)
     await message.answer("🎟 <b>Coupons</b>", reply_markup=admin_coupons_kb(coupons))
+
+
+# ── Order Lookup ───────────────────────────────────────────────────
+
+@router_admin.message(AdminFlow.menu, F.text == BTN_ADM_ORDER_LOOKUP)
+async def admin_order_lookup_start(message: Message, state: FSMContext):
+    await state.set_state(AdminFlow.order_lookup)
+    await message.answer(
+        f"🔍 <b>Order Lookup</b>\n{_SEP}\n"
+        f"Enter an Order ID to search:\n"
+        f"<i>(e.g. ORD-0001, VPN-0001, PXY-0001)</i>",
+        reply_markup=_kb([BACK_BTN, HOME_BTN]),
+    )
+
+
+@router_admin.message(AdminFlow.order_lookup)
+async def admin_order_lookup_search(message: Message, state: FSMContext):
+    if message.text in (BACK_BTN, HOME_BTN):
+        await state.set_state(AdminFlow.menu)
+        await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+        return
+    oid = (message.text or "").strip()
+    if not oid:
+        await message.answer("❌ Please enter a valid Order ID.")
+        return
+    # Validate format to prevent path injection
+    if not re.match(r'^[A-Z]{2,4}-\d{3,4}$', oid):
+        await message.answer(
+            "❌ Invalid Order ID format.\n"
+            "Use format like: ORD-0001, VPN-0001, PXY-0001"
+        )
+        return
+    # Prefix-aware routing to reduce redundant Firebase lookups
+    if oid.startswith("ORD-"):
+        order = await db_get(f"orders/{oid}")
+        if order:
+            user = await get_user(order.get("user_id", 0)) or {}
+            items_preview = ""
+            items_list = order.get("items", [])
+            if items_list:
+                preview = "\n".join(str(i) for i in items_list[:5])
+                more = f"\n<i>... +{len(items_list) - 5} more</i>" if len(items_list) > 5 else ""
+                items_preview = f"\n📋 <b>Items:</b>\n<code>{preview}{more}</code>"
+            await message.answer(
+                f"📮 <b>Mail Order Details</b>\n{_SEP}\n"
+                f"🆔 Order: <code>{oid}</code>\n"
+                f"👤 User: @{user.get('username', '—')} (<code>{order.get('user_id')}</code>)\n"
+                f"📦 Product: <b>{order.get('product_name', '—')}</b>\n"
+                f"🔢 Qty: <b>{order.get('qty', 0)}</b>\n"
+                f"💵 Total: <b>${order.get('total_price', 0):.2f}</b>\n"
+                f"📊 Status: <b>{order.get('status', '—')}</b>\n"
+                f"🕒 Date: {_dt(order.get('created_at', 0))}"
+                f"{items_preview}",
+                reply_markup=_kb([BACK_BTN, HOME_BTN]),
+            )
+            return
+    elif oid.startswith("VPN-"):
+        vpn_order = await db_get(f"vpn_orders/{oid}")
+        if vpn_order:
+            user = await get_user(vpn_order.get("user_id", 0)) or {}
+            await message.answer(
+                f"🌐 <b>VPN Order Details</b>\n{_SEP}\n"
+                f"🆔 Order: <code>{oid}</code>\n"
+                f"👤 User: @{user.get('username', '—')} (<code>{vpn_order.get('user_id')}</code>)\n"
+                f"📦 Product: <b>{vpn_order.get('product_name', '—')}</b>\n"
+                f"⏱ Duration: <b>{vpn_order.get('duration_days', 0)} day(s)</b>\n"
+                f"💵 Price: <b>${vpn_order.get('price', 0):.2f}</b>\n"
+                f"📊 Status: <b>{vpn_order.get('status', '—')}</b>\n"
+                f"🕒 Date: {_dt(vpn_order.get('created_at', 0))}",
+                reply_markup=_kb([BACK_BTN, HOME_BTN]),
+            )
+            return
+    elif oid.startswith("PXY-"):
+        proxy_order = await db_get(f"proxy_orders/{oid}")
+        if proxy_order:
+            user = await get_user(proxy_order.get("user_id", 0)) or {}
+            items_preview = ""
+            items_list = proxy_order.get("items", [])
+            if items_list:
+                preview = "\n".join(str(i) for i in items_list[:5])
+                more = f"\n<i>... +{len(items_list) - 5} more</i>" if len(items_list) > 5 else ""
+                items_preview = f"\n📋 <b>Items:</b>\n<code>{preview}{more}</code>"
+            await message.answer(
+                f"🔐 <b>Proxy Order Details</b>\n{_SEP}\n"
+                f"🆔 Order: <code>{oid}</code>\n"
+                f"👤 User: @{user.get('username', '—')} (<code>{proxy_order.get('user_id')}</code>)\n"
+                f"📦 Product: <b>{proxy_order.get('product_name', '—')}</b>\n"
+                f"📡 Duration: <b>{proxy_order.get('duration_days', '—')}</b>\n"
+                f"💵 Price: <b>${proxy_order.get('price', 0):.2f}</b>\n"
+                f"📊 Status: <b>{proxy_order.get('status', '—')}</b>\n"
+                f"🕒 Date: {_dt(proxy_order.get('created_at', 0))}"
+                f"{items_preview}",
+                reply_markup=_kb([BACK_BTN, HOME_BTN]),
+            )
+            return
+    else:
+        # Fallback for legacy or unknown prefix: search all collections
+        order = await db_get(f"orders/{oid}")
+        if order:
+            user = await get_user(order.get("user_id", 0)) or {}
+            items_preview = ""
+            items_list = order.get("items", [])
+            if items_list:
+                preview = "\n".join(str(i) for i in items_list[:5])
+                more = f"\n<i>... +{len(items_list) - 5} more</i>" if len(items_list) > 5 else ""
+                items_preview = f"\n📋 <b>Items:</b>\n<code>{preview}{more}</code>"
+            await message.answer(
+                f"📮 <b>Mail Order Details</b>\n{_SEP}\n"
+                f"🆔 Order: <code>{oid}</code>\n"
+                f"👤 User: @{user.get('username', '—')} (<code>{order.get('user_id')}</code>)\n"
+                f"📦 Product: <b>{order.get('product_name', '—')}</b>\n"
+                f"🔢 Qty: <b>{order.get('qty', 0)}</b>\n"
+                f"💵 Total: <b>${order.get('total_price', 0):.2f}</b>\n"
+                f"📊 Status: <b>{order.get('status', '—')}</b>\n"
+                f"🕒 Date: {_dt(order.get('created_at', 0))}"
+                f"{items_preview}",
+                reply_markup=_kb([BACK_BTN, HOME_BTN]),
+            )
+            return
+        vpn_order = await db_get(f"vpn_orders/{oid}")
+        if vpn_order:
+            user = await get_user(vpn_order.get("user_id", 0)) or {}
+            await message.answer(
+                f"🌐 <b>VPN Order Details</b>\n{_SEP}\n"
+                f"🆔 Order: <code>{oid}</code>\n"
+                f"👤 User: @{user.get('username', '—')} (<code>{vpn_order.get('user_id')}</code>)\n"
+                f"📦 Product: <b>{vpn_order.get('product_name', '—')}</b>\n"
+                f"⏱ Duration: <b>{vpn_order.get('duration_days', 0)} day(s)</b>\n"
+                f"💵 Price: <b>${vpn_order.get('price', 0):.2f}</b>\n"
+                f"📊 Status: <b>{vpn_order.get('status', '—')}</b>\n"
+                f"🕒 Date: {_dt(vpn_order.get('created_at', 0))}",
+                reply_markup=_kb([BACK_BTN, HOME_BTN]),
+            )
+            return
+        proxy_order = await db_get(f"proxy_orders/{oid}")
+        if proxy_order:
+            user = await get_user(proxy_order.get("user_id", 0)) or {}
+            items_preview = ""
+            items_list = proxy_order.get("items", [])
+            if items_list:
+                preview = "\n".join(str(i) for i in items_list[:5])
+                more = f"\n<i>... +{len(items_list) - 5} more</i>" if len(items_list) > 5 else ""
+                items_preview = f"\n📋 <b>Items:</b>\n<code>{preview}{more}</code>"
+            await message.answer(
+                f"🔐 <b>Proxy Order Details</b>\n{_SEP}\n"
+                f"🆔 Order: <code>{oid}</code>\n"
+                f"👤 User: @{user.get('username', '—')} (<code>{proxy_order.get('user_id')}</code>)\n"
+                f"📦 Product: <b>{proxy_order.get('product_name', '—')}</b>\n"
+                f"📡 Duration: <b>{proxy_order.get('duration_days', '—')}</b>\n"
+                f"💵 Price: <b>${proxy_order.get('price', 0):.2f}</b>\n"
+                f"📊 Status: <b>{proxy_order.get('status', '—')}</b>\n"
+                f"🕒 Date: {_dt(proxy_order.get('created_at', 0))}"
+                f"{items_preview}",
+                reply_markup=_kb([BACK_BTN, HOME_BTN]),
+            )
+            return
+    await message.answer(
+        f"❌ <b>Order Not Found</b>\n{_SEP}\n"
+        f"No order found with ID: <code>{oid}</code>\n"
+        f"Please check the ID and try again.",
+        reply_markup=_kb([BACK_BTN, HOME_BTN]),
+    )
 
 
 # ── Export Mail Orders ─────────────────────────────────────────────
