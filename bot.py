@@ -397,8 +397,9 @@ def make_user_order_xlsx(
     return buf.read()
 
 
-def make_products_xlsx(products: dict) -> bytes:
-    """Export all products to an xlsx file for admin download."""
+def make_products_xlsx(products: dict, all_stocks: dict = None) -> bytes:
+    """Export all products to an xlsx file for admin download.
+    If all_stocks is provided, also creates per-product stock sheets."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Products"
@@ -435,6 +436,48 @@ def make_products_xlsx(products: dict) -> bytes:
         ws.column_dimensions[ws.cell(1, col_idx).column_letter].width = width
     ws.freeze_panes = "A2"
 
+    # Per-product stock sheets
+    if all_stocks:
+        used_sheet_names = set()
+        for pid, product in products.items():
+            stock = all_stocks.get(pid) or {}
+            if not stock:
+                continue
+            pname = product.get("name", pid)
+            safe_title = re.sub(r"[\\/*?:\[\]]", "", pname)[:28] or pid[:28]
+            # Handle sheet-name collisions
+            original_title = safe_title
+            counter = 2
+            while safe_title.lower() in used_sheet_names:
+                suffix = f"({counter})"
+                safe_title = original_title[:28 - len(suffix)] + suffix
+                counter += 1
+            used_sheet_names.add(safe_title.lower())
+            stock_ws = wb.create_sheet(safe_title)
+            stock_ws.append(["#", "Email", "Password", "Raw"])
+            for cell in stock_ws[1]:
+                cell.font      = hdr_font
+                cell.fill      = hdr_fill
+                cell.alignment = hdr_align
+            if isinstance(stock, list):
+                stock = {str(i): v for i, v in enumerate(stock)}
+            for idx, (key, item) in enumerate(stock.items(), 1):
+                item_str = str(item).strip()
+                if ":" in item_str:
+                    parts = item_str.split(":", 1)
+                    email, password = parts[0].strip(), parts[1].strip()
+                else:
+                    email, password = item_str, ""
+                stock_ws.append([idx, email, password, item_str])
+                if idx % 2 == 0:
+                    for cell in stock_ws[stock_ws.max_row]:
+                        cell.fill = alt_fill
+            stock_ws.column_dimensions["A"].width = 6
+            stock_ws.column_dimensions["B"].width = 35
+            stock_ws.column_dimensions["C"].width = 25
+            stock_ws.column_dimensions["D"].width = 65
+            stock_ws.freeze_panes = "A2"
+
     # Instructions sheet
     ws2 = wb.create_sheet("Import Guide")
     ws2.append(["📋 Import Guide — How to add products via file"])
@@ -462,7 +505,8 @@ def make_products_xlsx(products: dict) -> bytes:
 
 
 def parse_products_xlsx(content: bytes) -> List[dict]:
-    """Parse an xlsx/csv file and return a list of product dicts to import."""
+    """Parse an xlsx/csv file and return a list of product dicts to import.
+    Also parses per-product stock sheets and attaches stock_items to each product."""
     results = []
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
@@ -516,7 +560,59 @@ def parse_products_xlsx(content: bytes) -> List[dict]:
         results.append({
             "name": name, "emoji": emoji, "category": category,
             "price": round(price, 4), "delivery_mode": delivery, "hidden": hidden,
+            "stock_items": [],
         })
+
+    # Parse per-product stock sheets (match by product name)
+    product_names = {p["name"].lower(): p for p in results}
+    skip_sheets = {"products", "import guide", "summary"}
+    for sheet_name in wb.sheetnames:
+        if sheet_name.lower() in skip_sheets:
+            continue
+        try:
+            stock_ws = wb[sheet_name]
+            stock_rows = list(stock_ws.iter_rows(values_only=True))
+        except Exception:
+            continue
+        if not stock_rows:
+            continue
+        # Try to match sheet name to a product
+        matched_product = product_names.get(sheet_name.strip().lower())
+        if not matched_product:
+            # Try partial match
+            for pname_lower, prod in product_names.items():
+                if pname_lower[:28].rstrip() == sheet_name.strip().lower()[:28].rstrip():
+                    matched_product = prod
+                    break
+        if not matched_product:
+            continue
+        # Parse stock rows - look for Raw or Email column
+        stock_header = [str(c).strip().lower() if c else "" for c in stock_rows[0]]
+        raw_col = None
+        email_col = None
+        pass_col = None
+        for si, sh in enumerate(stock_header):
+            if "raw" in sh:
+                raw_col = si
+            elif "email" in sh:
+                email_col = si
+            elif "password" in sh or "pass" in sh:
+                pass_col = si
+        for srow in stock_rows[1:]:
+            if not srow:
+                continue
+            if raw_col is not None and srow[raw_col]:
+                item_str = str(srow[raw_col]).strip()
+                if item_str:
+                    matched_product["stock_items"].append(item_str)
+            elif email_col is not None and srow[email_col]:
+                email = str(srow[email_col]).strip()
+                if pass_col is not None and srow[pass_col]:
+                    password = str(srow[pass_col]).strip()
+                    matched_product["stock_items"].append(f"{email}:{password}")
+                else:
+                    matched_product["stock_items"].append(email)
+
     return results
 
 
@@ -617,6 +713,9 @@ BTN_UNBAN_USER  = _b("✅ Unban User")
 BTN_ADD_BAL     = _b("💰 Add Balance")
 BTN_REMOVE_BAL  = _b("💸 Remove Balance")
 BTN_ADD_BONUS   = _b("🎁 Add Bonus")
+BTN_REMOVE_BONUS = _b("🗑 Remove Bonus")
+BTN_BONUS_ALL_USERS = _b("🎁 Bonus All Users")
+BTN_BONUS_TOP10 = _b("🏆 Bonus Top 10")
 
 # ── Admin coupon actions ───────────────────────────────────────────
 BTN_DELETE_COUPON = _b("🗑 Delete Coupon")
@@ -1800,6 +1899,10 @@ class AdminFlow(StatesGroup):
     proxy_fulfill     = State()
     dep_reject_reason = State()
     products_import   = State()
+    bonus_all_amount  = State()
+    bonus_all_products = State()
+    bonus_top10_amount = State()
+    bonus_top10_products = State()
     proxy_pkg_list    = State()
     proxy_pkg_add     = State()
 
@@ -2052,7 +2155,8 @@ def admin_user_actions_kb(is_banned: bool) -> ReplyKeyboardMarkup:
     return _kb(
         [ban_btn],
         [BTN_ADD_BAL, BTN_REMOVE_BAL],
-        [BTN_ADD_BONUS],
+        [BTN_ADD_BONUS, BTN_REMOVE_BONUS],
+        [BTN_BONUS_ALL_USERS, BTN_BONUS_TOP10],
         [BACK_BTN, HOME_BTN],
     )
 
@@ -4979,13 +5083,18 @@ async def admin_products_action(message: Message, state: FSMContext):
         if not products:
             await message.answer("❌ No products found.")
             return
-        xlsx_bytes = make_products_xlsx(products)
+        all_stocks = {}
+        for pid in products:
+            all_stocks[pid] = await db_get(f"stocks/{pid}") or {}
+        xlsx_bytes = make_products_xlsx(products, all_stocks)
         date_str   = time.strftime("%Y%m%d_%H%M", time.gmtime())
+        total_items = sum(len(v) for v in all_stocks.values())
         await message.answer_document(
             document=BufferedInputFile(xlsx_bytes, filename=f"products_{date_str}.xlsx"),
             caption=(
                 f"📦 <b>All Products</b>\n{_SEP}\n"
-                f"Total: <b>{len(products)}</b> product(s)\n\n"
+                f"Total: <b>{len(products)}</b> product(s)\n"
+                f"📋 Stock Items: <b>{total_items}</b>\n\n"
                 f"<i>Edit this file and upload it via 📤 Import Products to add new products in bulk.</i>"
             ),
         )
@@ -5183,21 +5292,28 @@ async def admin_products_import(message: Message, state: FSMContext):
         return
     created = 0
     skipped = 0
+    stock_added = 0
     for p in parsed:
         try:
-            await create_product(p["name"], p["price"], p["emoji"], p["category"],
+            pid = await create_product(p["name"], p["price"], p["emoji"], p["category"],
                                   p.get("delivery_mode", "manual"), p.get("hidden", False))
             created += 1
+            # Import stock items if present
+            if p.get("stock_items"):
+                added = await add_stock_items(pid, p["stock_items"])
+                stock_added += added
         except Exception:
             skipped += 1
     await _back_to_products(message, state)
     lines = [f"  • {p['emoji']} {p['name']} [{p['category'].upper()}] — ${p['price']:.2f}" for p in parsed[:10]]
     preview = "\n".join(lines) + (f"\n  <i>... and {len(parsed) - 10} more</i>" if len(parsed) > 10 else "")
+    stock_line = f"\n📋 Stock imported: <b>{stock_added}</b> item(s)" if stock_added > 0 else ""
     await message.answer(
         f"✅ <b>Import Complete!</b>\n{_SEP}\n"
         f"✅ Created: <b>{created}</b> product(s)\n"
-        f"❌ Skipped: <b>{skipped}</b>\n\n"
-        f"<b>Imported products:</b>\n{preview}",
+        f"❌ Skipped: <b>{skipped}</b>{stock_line}\n\n"
+        f"<b>Imported products:</b>\n{preview}\n\n"
+        f"<i>ℹ️ Note: Import always creates new products. It does not update existing ones.</i>",
     )
 
 
@@ -5615,6 +5731,36 @@ async def admin_user_action(message: Message, state: FSMContext):
             )
         await message.answer(f"🎁 Enter bonus amount (USD) for <code>{uid}</code>:", reply_markup=input_kb())
         return
+    if message.text == BTN_REMOVE_BONUS:
+        current_bonus = await get_bonus(uid)
+        if current_bonus["amount"] <= 0:
+            await message.answer("❌ User has no bonus to remove.")
+            return
+        await db_delete(f"users/{uid}/bonus")
+        updated = await get_user(uid)
+        await state.update_data(target_user=updated)
+        await message.answer(
+            f"✅ Bonus removed from user <code>{uid}</code>.\n"
+            f"Previous bonus was: <b>${current_bonus['amount']:.2f}</b>",
+            reply_markup=admin_user_actions_kb(updated.get("is_banned", False)),
+        )
+        try:
+            await message.bot.send_message(
+                uid,
+                f"🗑 <b>Bonus Removed</b>\n{_SEP}\n"
+                f"Your bonus of <b>${current_bonus['amount']:.2f}</b> has been removed by admin.",
+            )
+        except Exception:
+            pass
+        return
+    if message.text == BTN_BONUS_ALL_USERS:
+        await state.set_state(AdminFlow.bonus_all_amount)
+        await message.answer("🎁 <b>Bonus All Users</b>\n\nEnter bonus amount (USD):", reply_markup=input_kb())
+        return
+    if message.text == BTN_BONUS_TOP10:
+        await state.set_state(AdminFlow.bonus_top10_amount)
+        await message.answer("🏆 <b>Bonus Top 10 Active Users</b>\n\nEnter bonus amount (USD):", reply_markup=input_kb())
+        return
     await message.answer("❌ Select from keyboard.")
 
 
@@ -5794,6 +5940,281 @@ async def admin_bonus_done(call: CallbackQuery, state: FSMContext):
     except Exception:
         pass
     await call.answer()
+
+
+# ── Bonus All Users ────────────────────────────────────────────────
+
+@router_admin.message(AdminFlow.bonus_all_amount)
+async def admin_bonus_all_amount(message: Message, state: FSMContext):
+    if message.text in (CANCEL_BTN, BACK_BTN, HOME_BTN):
+        data = await state.get_data()
+        user = data.get("target_user", {})
+        await state.set_state(AdminFlow.user_detail)
+        await message.answer(fmt_user_info(user), reply_markup=admin_user_actions_kb(user.get("is_banned", False)))
+        return
+    amount, err = validate_price(message.text)
+    if err:
+        await message.answer(err)
+        return
+    if amount <= 0:
+        await message.answer("❌ Bonus amount must be greater than 0.")
+        return
+    await state.update_data(bonus_all_amount=amount, bonusall_selected_products=[])
+    products = await get_all_products()
+    if not products:
+        await message.answer("❌ No products found. Add products first.")
+        data = await state.get_data()
+        user = data.get("target_user", {})
+        await state.set_state(AdminFlow.user_detail)
+        await message.answer(fmt_user_info(user), reply_markup=admin_user_actions_kb(user.get("is_banned", False)))
+        return
+    buttons = []
+    for pid, prod in products.items():
+        buttons.append([InlineKeyboardButton(
+            text=f"{prod.get('emoji', '📦')} {prod['name']}",
+            callback_data=f"bonusall_prod:{pid}",
+        )])
+    buttons.append([InlineKeyboardButton(text="✅ Done", callback_data="bonusall_done")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await state.set_state(AdminFlow.bonus_all_products)
+    await message.answer(
+        f"🎁 Bonus All Users: <b>${amount:.2f}</b>\n\n"
+        f"Select which products this bonus can be used on:\n"
+        f"(Tap to toggle selection, then press Done)",
+        reply_markup=kb,
+    )
+
+
+@router_admin.callback_query(F.data.startswith("bonusall_prod:"))
+async def admin_bonusall_toggle_product(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("Not authorized", show_alert=True)
+        return
+    current_state = await state.get_state()
+    if current_state != AdminFlow.bonus_all_products.state:
+        await call.answer()
+        return
+    pid = call.data.split(":", 1)[1]
+    data = await state.get_data()
+    selected = data.get("bonusall_selected_products", [])
+    if pid in selected:
+        selected.remove(pid)
+    else:
+        selected.append(pid)
+    await state.update_data(bonusall_selected_products=selected)
+    products = await get_all_products()
+    buttons = []
+    for p_id, prod in products.items():
+        check = "✅ " if p_id in selected else ""
+        buttons.append([InlineKeyboardButton(
+            text=f"{check}{prod.get('emoji', '📦')} {prod['name']}",
+            callback_data=f"bonusall_prod:{p_id}",
+        )])
+    buttons.append([InlineKeyboardButton(text="✅ Done", callback_data="bonusall_done")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await call.message.edit_reply_markup(reply_markup=kb)
+    await call.answer()
+
+
+@router_admin.callback_query(F.data == "bonusall_done")
+async def admin_bonusall_done(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("Not authorized", show_alert=True)
+        return
+    current_state = await state.get_state()
+    if current_state != AdminFlow.bonus_all_products.state:
+        await call.answer()
+        return
+    data = await state.get_data()
+    amount = data.get("bonus_all_amount", 0)
+    selected = data.get("bonusall_selected_products", [])
+    if not selected:
+        await call.answer("Please select at least one product.", show_alert=True)
+        return
+    products = await get_all_products()
+    valid_selected = [p for p in selected if p in products]
+    if not valid_selected:
+        await call.answer("Selected products no longer exist. Please re-select.", show_alert=True)
+        return
+    await call.answer()
+    all_users = await get_all_users()
+    count = 0
+    for uid_str in all_users:
+        try:
+            uid_int = int(uid_str)
+            await set_bonus(uid_int, amount, valid_selected)
+            count += 1
+            try:
+                prod_names = [products[p]["name"] for p in valid_selected if p in products]
+                await call.bot.send_message(
+                    uid_int,
+                    f"🎁 <b>Bonus Added!</b>\n{_SEP}\n"
+                    f"💵 Amount: <b>${amount:.2f}</b>\n"
+                    f"📦 Eligible Products: {', '.join(prod_names)}\n\n"
+                    f"Use this bonus to purchase the above products!",
+                )
+            except Exception:
+                pass
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+    prod_names = [products[p]["name"] for p in valid_selected if p in products]
+    await call.message.edit_text(
+        f"✅ Bonus set for <b>{count}</b> user(s)!\n"
+        f"🎁 Amount: <b>${amount:.2f}</b>\n"
+        f"📦 Products: {', '.join(prod_names)}"
+    )
+    user = data.get("target_user", {})
+    if not user:
+        await state.set_state(AdminFlow.menu)
+        await call.message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+    else:
+        await state.set_state(AdminFlow.user_detail)
+        await call.message.answer(
+            fmt_user_info(user),
+            reply_markup=admin_user_actions_kb(user.get("is_banned", False)),
+        )
+
+
+# ── Bonus Top 10 ──────────────────────────────────────────────────
+
+@router_admin.message(AdminFlow.bonus_top10_amount)
+async def admin_bonus_top10_amount(message: Message, state: FSMContext):
+    if message.text in (CANCEL_BTN, BACK_BTN, HOME_BTN):
+        data = await state.get_data()
+        user = data.get("target_user", {})
+        await state.set_state(AdminFlow.user_detail)
+        await message.answer(fmt_user_info(user), reply_markup=admin_user_actions_kb(user.get("is_banned", False)))
+        return
+    amount, err = validate_price(message.text)
+    if err:
+        await message.answer(err)
+        return
+    if amount <= 0:
+        await message.answer("❌ Bonus amount must be greater than 0.")
+        return
+    await state.update_data(bonus_top10_amount=amount, bonustop_selected_products=[])
+    products = await get_all_products()
+    if not products:
+        await message.answer("❌ No products found. Add products first.")
+        data = await state.get_data()
+        user = data.get("target_user", {})
+        await state.set_state(AdminFlow.user_detail)
+        await message.answer(fmt_user_info(user), reply_markup=admin_user_actions_kb(user.get("is_banned", False)))
+        return
+    buttons = []
+    for pid, prod in products.items():
+        buttons.append([InlineKeyboardButton(
+            text=f"{prod.get('emoji', '📦')} {prod['name']}",
+            callback_data=f"bonustop_prod:{pid}",
+        )])
+    buttons.append([InlineKeyboardButton(text="✅ Done", callback_data="bonustop_done")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await state.set_state(AdminFlow.bonus_top10_products)
+    await message.answer(
+        f"🏆 Bonus Top 10: <b>${amount:.2f}</b>\n\n"
+        f"Select which products this bonus can be used on:\n"
+        f"(Tap to toggle selection, then press Done)",
+        reply_markup=kb,
+    )
+
+
+@router_admin.callback_query(F.data.startswith("bonustop_prod:"))
+async def admin_bonustop_toggle_product(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("Not authorized", show_alert=True)
+        return
+    current_state = await state.get_state()
+    if current_state != AdminFlow.bonus_top10_products.state:
+        await call.answer()
+        return
+    pid = call.data.split(":", 1)[1]
+    data = await state.get_data()
+    selected = data.get("bonustop_selected_products", [])
+    if pid in selected:
+        selected.remove(pid)
+    else:
+        selected.append(pid)
+    await state.update_data(bonustop_selected_products=selected)
+    products = await get_all_products()
+    buttons = []
+    for p_id, prod in products.items():
+        check = "✅ " if p_id in selected else ""
+        buttons.append([InlineKeyboardButton(
+            text=f"{check}{prod.get('emoji', '📦')} {prod['name']}",
+            callback_data=f"bonustop_prod:{p_id}",
+        )])
+    buttons.append([InlineKeyboardButton(text="✅ Done", callback_data="bonustop_done")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await call.message.edit_reply_markup(reply_markup=kb)
+    await call.answer()
+
+
+@router_admin.callback_query(F.data == "bonustop_done")
+async def admin_bonustop_done(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("Not authorized", show_alert=True)
+        return
+    current_state = await state.get_state()
+    if current_state != AdminFlow.bonus_top10_products.state:
+        await call.answer()
+        return
+    data = await state.get_data()
+    amount = data.get("bonus_top10_amount", 0)
+    selected = data.get("bonustop_selected_products", [])
+    if not selected:
+        await call.answer("Please select at least one product.", show_alert=True)
+        return
+    products = await get_all_products()
+    valid_selected = [p for p in selected if p in products]
+    if not valid_selected:
+        await call.answer("Selected products no longer exist. Please re-select.", show_alert=True)
+        return
+    await call.answer()
+    all_users = await get_all_users()
+    # Sort by order_count descending, take top 10
+    sorted_users = sorted(
+        all_users.items(),
+        key=lambda x: x[1].get("order_count", 0) if isinstance(x[1], dict) else 0,
+        reverse=True,
+    )[:10]
+    count = 0
+    for uid_str, u_data in sorted_users:
+        try:
+            uid_int = int(uid_str)
+            await set_bonus(uid_int, amount, valid_selected)
+            count += 1
+            try:
+                prod_names = [products[p]["name"] for p in valid_selected if p in products]
+                await call.bot.send_message(
+                    uid_int,
+                    f"🏆 <b>Bonus Added!</b>\n{_SEP}\n"
+                    f"You are one of the top 10 active users!\n"
+                    f"💵 Amount: <b>${amount:.2f}</b>\n"
+                    f"📦 Eligible Products: {', '.join(prod_names)}\n\n"
+                    f"Use this bonus to purchase the above products!",
+                )
+            except Exception:
+                pass
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+    prod_names = [products[p]["name"] for p in valid_selected if p in products]
+    await call.message.edit_text(
+        f"✅ Bonus set for top <b>{count}</b> active user(s)!\n"
+        f"🎁 Amount: <b>${amount:.2f}</b>\n"
+        f"📦 Products: {', '.join(prod_names)}"
+    )
+    user = data.get("target_user", {})
+    if not user:
+        await state.set_state(AdminFlow.menu)
+        await call.message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+    else:
+        await state.set_state(AdminFlow.user_detail)
+        await call.message.answer(
+            fmt_user_info(user),
+            reply_markup=admin_user_actions_kb(user.get("is_banned", False)),
+        )
 
 
 # ── Coupons ────────────────────────────────────────────────────────
@@ -6230,7 +6651,7 @@ async def stock_export_loop(bot: Bot) -> None:
                 all_stocks[pid] = await db_get(f"stocks/{pid}") or {}
 
             total_items = sum(len(v) for v in all_stocks.values())
-            xlsx_bytes = make_all_stock_export_xlsx(products, all_stocks)
+            xlsx_bytes = make_products_xlsx(products, all_stocks)
             date_str = time.strftime("%Y%m%d_%H%M", time.gmtime())
 
             await bot.send_document(
@@ -6241,7 +6662,8 @@ async def stock_export_loop(bot: Bot) -> None:
                     f"\U0001f4c2 Products: <b>{len(products)}</b>\n"
                     f"\U0001f4cb Total Items: <b>{total_items}</b>\n"
                     f"\U0001f552 Interval: <b>{interval:.0f} min</b>\n\n"
-                    f"<i>Exported at {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}</i>"
+                    f"<i>Exported at {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}</i>\n"
+                    f"<i>This file is importable via Import Products.</i>"
                 ),
             )
 
