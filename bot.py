@@ -1089,7 +1089,7 @@ def parse_stock_file(content: bytes, filename: str) -> List[str]:
                 # Skip header row
                 if first_row:
                     first_row = False
-                    if any(c.lower() in ("email", "password", "account", "mail", "#", "no.", "number", "pass", "no") for c in cols):
+                    if any(c.lower() in ("email", "password", "account", "mail", "#", "no.", "number", "pass", "username", "login") for c in cols):
                         continue
                 if len(cols) >= 2:
                     items.append(f"{cols[0]}:{cols[1]}")
@@ -1117,7 +1117,7 @@ def parse_stock_file(content: bytes, filename: str) -> List[str]:
             # Skip header row
             if first_row:
                 first_row = False
-                if any(p.lower() in ("email", "password", "account", "mail", "#", "no.", "number", "pass", "no") for p in parts):
+                if any(p.lower() in ("email", "password", "account", "mail", "#", "no.", "number", "pass", "username", "login") for p in parts):
                     continue
             if len(parts) >= 2:
                 items.append(f"{parts[0]}:{parts[1]}")
@@ -1130,7 +1130,20 @@ def parse_stock_file(content: bytes, filename: str) -> List[str]:
         text = content.decode("utf-8-sig", errors="replace")
     except Exception:
         text = content.decode("latin-1", errors="replace")
-    return [_norm(ln) for ln in text.splitlines() if _norm(ln)]
+    _header_kw = ("email", "password", "account", "mail", "#", "no.", "number", "pass", "username", "login")
+    items = []
+    first_row = True
+    for ln in text.splitlines():
+        normed = _norm(ln)
+        if not normed:
+            continue
+        if first_row:
+            first_row = False
+            parts = [p.strip().lower() for p in normed.replace(":", ",").split(",") if p.strip()]
+            if any(p in _header_kw for p in parts):
+                continue
+        items.append(normed)
+    return items
 
 
 # ══════════════════════════════════════════════════════════════════
