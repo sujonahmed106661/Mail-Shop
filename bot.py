@@ -1819,6 +1819,8 @@ def validate_custom_days(text: str) -> Tuple[Optional[int], Optional[str]]:
     return days, None
 
 def validate_coupon(coupon: dict) -> Tuple[bool, Optional[str]]:
+    # NOTE: Coupon usage is tracked globally (used_count), not per-user.
+    # A single user can use the same coupon multiple times until max_uses is reached.
     if not coupon.get("active"):
         return False, "❌ Coupon is no longer active."
     if coupon.get("expires_at", 0) < int(time.time()):
@@ -2314,6 +2316,33 @@ class AuthMiddleware(BaseMiddleware):
             elif isinstance(event, CallbackQuery):
                 await event.answer("🚫 Account banned.", show_alert=True)
             return
+
+        # Force-join check for non-admin users (skip for Support button)
+        if not is_admin(user.id):
+            if isinstance(event, Message) and event.text == BTN_SUPPORT:
+                pass  # Allow support access without force-join
+            else:
+                try:
+                    passed, failed_channels = await check_force_join(data.get("bot") or event.bot, user.id)
+                    if not passed:
+                        links = []
+                        for ch in failed_channels:
+                            url = _channel_to_url(ch)
+                            links.append(f"  • <a href='{url}'>{ch}</a>" if url else f"  • {ch}")
+                        channels_text = "\n".join(links)
+                        msg = (
+                            f"📢 <b>Join Required!</b>\n\n"
+                            f"You must join the following channel(s) to use this bot:\n{channels_text}\n\n"
+                            f"After joining, try again."
+                        )
+                        if isinstance(event, Message):
+                            await event.answer(msg, disable_web_page_preview=True)
+                        elif isinstance(event, CallbackQuery):
+                            await event.answer("📢 Please join required channels first.", show_alert=True)
+                        return
+                except Exception:
+                    pass  # If force-join check fails, allow access
+
         return await handler(event, data)
 
 
@@ -3009,6 +3038,43 @@ async def order_history(message: Message):
 
 
 # ══════════════════════════════════════════════════════════════════
+# HELPER — Low Stock Alert (shared by mail and proxy flows)
+# ══════════════════════════════════════════════════════════════════
+
+async def _check_low_stock_alert(bot: Bot, pid: str, product_name: str) -> None:
+    """Send low stock or out-of-stock alert to all admins."""
+    try:
+        remaining = await get_stock_count(pid)
+        settings  = await get_settings()
+        threshold = int(settings.get("low_stock_threshold", 5))
+        if remaining == 0:
+            for adm in ADMIN_IDS:
+                try:
+                    await bot.send_message(
+                        adm,
+                        f"\U0001f6a8 <b>Out of Stock!</b>\n{_SEP}\n"
+                        f"\U0001f4e6 Product: <b>{product_name}</b>\n"
+                        f"Stock is now <b>0</b>. Product hidden from users.",
+                    )
+                except Exception:
+                    pass
+        elif 0 < remaining <= threshold:
+            for adm in ADMIN_IDS:
+                try:
+                    await bot.send_message(
+                        adm,
+                        f"\u26a0\ufe0f <b>Low Stock Alert!</b>\n{_SEP}\n"
+                        f"\U0001f4e6 Product: <b>{product_name}</b>\n"
+                        f"\U0001f522 Remaining stock: <b>{remaining}</b> item(s)\n"
+                        f"Please restock soon!",
+                    )
+                except Exception:
+                    pass
+    except Exception as _se:
+        logger.warning("Low stock alert failed: %s", _se)
+
+
+# ══════════════════════════════════════════════════════════════════
 # ROUTER — Mail (auto-delivery)
 # ══════════════════════════════════════════════════════════════════
 
@@ -3309,7 +3375,8 @@ async def mail_confirm(message: Message, state: FSMContext):
                             f"🔑 OAuth2: ✅ Ready\n\n"
                             f"Press <b>🔓 Get Code</b> to read codes directly.\n"
                             + (f"\n{display}" if display else "")
-                        )
+                        ),
+                        reply_markup=main_menu_kb(),
                     )
                 else:
                     # Set without OAuth2 — user can complete setup manually
@@ -3321,7 +3388,8 @@ async def mail_confirm(message: Message, state: FSMContext):
                         f"✅ <b>Mail Auto-Set!</b>\n{_SEP}\n"
                         f"📧 <code>{html_lib.escape(mail_email)}</code>\n"
                         f"🔑 OAuth2: ⚠️ Not available\n\n"
-                        f"Press <b>🔓 Get Code</b> → <b>📧 Set Mail</b> and re-enter the mail to activate full access."
+                        f"Press <b>🔓 Get Code</b> → <b>📧 Set Mail</b> and re-enter the mail to activate full access.",
+                        reply_markup=main_menu_kb(),
                     )
         except Exception as _ae:
             logger.warning("Auto-set mail session failed: %s", _ae)
@@ -3344,35 +3412,7 @@ async def mail_confirm(message: Message, state: FSMContext):
         logger.warning("Failed to send order xlsx to user: %s", _xe)
 
     # ── Low Stock Auto-Alert ───────────────────────────────────────
-    try:
-        remaining = await get_stock_count(pid)
-        settings  = await get_settings()
-        threshold = int(settings.get("low_stock_threshold", 5))
-        if 0 < remaining <= threshold:
-            for adm in ADMIN_IDS:
-                try:
-                    await message.bot.send_message(
-                        adm,
-                        f"⚠️ <b>Low Stock Alert!</b>\n{_SEP}\n"
-                        f"📦 Product: <b>{product['name']}</b>\n"
-                        f"🔢 Remaining stock: <b>{remaining}</b> item(s)\n"
-                        f"Please restock soon!",
-                    )
-                except Exception:
-                    pass
-        elif remaining == 0:
-            for adm in ADMIN_IDS:
-                try:
-                    await message.bot.send_message(
-                        adm,
-                        f"🚨 <b>Out of Stock!</b>\n{_SEP}\n"
-                        f"📦 Product: <b>{product['name']}</b>\n"
-                        f"Stock is now <b>0</b>. Product hidden from users.",
-                    )
-                except Exception:
-                    pass
-    except Exception as _se:
-        logger.warning("Low stock alert failed: %s", _se)
+    await _check_low_stock_alert(message.bot, pid, product['name'])
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3979,23 +4019,25 @@ async def proxy_auto_confirm(message: Message, state: FSMContext):
         reply_markup=main_menu_kb(),
     )
 
-    # Low stock alert
+    # Send purchased items as xlsx file to the user
     try:
-        remaining = await get_stock_count(pid)
-        settings  = await get_settings()
-        threshold = int(settings.get("low_stock_threshold", 5))
-        if 0 < remaining <= threshold:
-            for adm in ADMIN_IDS:
-                try:
-                    await message.bot.send_message(
-                        adm,
-                        f"⚠️ <b>Low Stock Alert!</b>\n{_SEP}\n"
-                        f"🔐 {product['name']}\n📦 Only <b>{remaining}</b> proxy item(s) left!",
-                    )
-                except Exception:
-                    pass
-    except Exception:
-        pass
+        xlsx_bytes = make_user_order_xlsx(oid, product["name"], qty, total, items)
+        date_str = time.strftime("%Y%m%d_%H%M", time.gmtime())
+        filename = f"order_{oid[:8]}_{date_str}.xlsx"
+        await message.answer_document(
+            document=BufferedInputFile(xlsx_bytes, filename=filename),
+            caption=(
+                f"📋 <b>Your Proxies File</b>\n{_SEP}\n"
+                f"🔐 {product['name']} \u00d7 {qty}\n"
+                f"🆔 Order: <code>{oid[:12]}</code>\n\n"
+                f"<i>Open this file to see all your proxy details.</i>"
+            ),
+        )
+    except Exception as _xe:
+        logger.warning("Failed to send proxy order xlsx to user: %s", _xe)
+
+    # Low stock alert
+    await _check_low_stock_alert(message.bot, pid, product['name'])
 
 
 # ── MANUAL PROXY — duration & confirm ──────────────────────────────
@@ -4313,7 +4355,7 @@ async def deposit_method_chosen(message: Message, state: FSMContext):
         label   = "Binance"
     rate   = settings.get("usd_rate", 125)
     is_usd = (method_key == "binance")
-    await state.update_data(method_key=method_key, method_label=label, min_amt=min_amt, rate=rate, is_usd=is_usd)
+    await state.update_data(method_key=method_key, method_label=label, min_amt=min_amt, rate=rate, is_usd=is_usd, pay_number=number)
     await state.set_state(UserFlow.dep_amount)
     await message.answer(fmt_deposit_info(label, number, rate, min_amt, is_usd), reply_markup=input_kb())
 
@@ -4359,7 +4401,7 @@ async def deposit_trx_entered(message: Message, state: FSMContext):
     if message.text in (CANCEL_BTN, BACK_BTN):
         data = await state.get_data()
         await state.set_state(UserFlow.dep_amount)
-        await message.answer(fmt_deposit_info(data.get("method_label", ""), "", data.get("rate", 0), data.get("min_amt", 0), data.get("is_usd", False)), reply_markup=input_kb())
+        await message.answer(fmt_deposit_info(data.get("method_label", ""), data.get("pay_number", ""), data.get("rate", 0), data.get("min_amt", 0), data.get("is_usd", False)), reply_markup=input_kb())
         return
     trx = message.text.strip()
     if await check_trx_duplicate(trx):
@@ -4763,12 +4805,6 @@ async def cmd_admin(message: Message, state: FSMContext):
     await message.answer(f"🔐 <b>Admin Panel</b>\n{_SEP}\nWelcome back, admin!", reply_markup=admin_main_kb())
 
 
-@router_admin.message(AdminFlow.menu, F.text == HOME_BTN)
-async def admin_to_home(message: Message, state: FSMContext):
-    await state.set_state(AdminFlow.menu)
-    await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
-
-
 # ── Dashboard ──────────────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_DASHBOARD)
@@ -4988,7 +5024,7 @@ async def cancel_proxy(call: CallbackQuery):
 
 @router_admin.message(AdminFlow.vpn_fulfill)
 async def vpn_credentials_received(message: Message, state: FSMContext):
-    if message.text and message.text.lower() in ("/cancel", BACK_BTN, HOME_BTN):
+    if message.text in (BACK_BTN, HOME_BTN) or (message.text and message.text.lower() == "/cancel"):
         _pending_fulfill.pop(message.from_user.id, None)
         await state.set_state(AdminFlow.menu)
         await message.answer("❌ Cancelled.", reply_markup=admin_main_kb())
@@ -5022,7 +5058,7 @@ async def vpn_credentials_received(message: Message, state: FSMContext):
 
 @router_admin.message(AdminFlow.proxy_fulfill)
 async def proxy_credentials_received(message: Message, state: FSMContext):
-    if message.text and message.text.lower() in ("/cancel", BACK_BTN, HOME_BTN):
+    if message.text in (BACK_BTN, HOME_BTN) or (message.text and message.text.lower() == "/cancel"):
         _pending_fulfill.pop(message.from_user.id, None)
         await state.set_state(AdminFlow.menu)
         await message.answer("❌ Cancelled.", reply_markup=admin_main_kb())
@@ -5056,7 +5092,7 @@ async def proxy_credentials_received(message: Message, state: FSMContext):
 
 @router_admin.message(AdminFlow.dep_reject_reason)
 async def deposit_reject_reason_received(message: Message, state: FSMContext):
-    if message.text and message.text.lower() in ("/cancel", BACK_BTN, HOME_BTN):
+    if message.text in (BACK_BTN, HOME_BTN) or (message.text and message.text.lower() == "/cancel"):
         _pending_reject.pop(message.from_user.id, None)
         await state.set_state(AdminFlow.menu)
         await message.answer("❌ Cancelled.", reply_markup=admin_main_kb())
@@ -5864,12 +5900,17 @@ async def admin_remove_bal(message: Message, state: FSMContext):
         return
     data    = await state.get_data()
     uid     = data.get("target_uid")
+    target_user = data.get("target_user", {})
+    current_bal = target_user.get("balance", 0)
     new_bal = await update_balance(uid, -amount)
     updated = await get_user(uid)
     await state.update_data(target_user=updated)
     await state.set_state(AdminFlow.user_detail)
+    warning = ""
+    if new_bal < 0:
+        warning = "\n\n\u26a0\ufe0f <b>Warning:</b> Balance went negative!"
     await message.answer(
-        f"✅ Removed <b>${amount:.2f}</b> → New Balance: <b>${new_bal:.2f}</b>",
+        f"\u2705 Removed <b>${amount:.2f}</b> \u2192 New Balance: <b>${new_bal:.2f}</b>{warning}",
         reply_markup=admin_user_actions_kb(updated.get("is_banned", False)),
     )
 
@@ -6663,6 +6704,10 @@ async def stock_export_loop(bot: Bot) -> None:
         try:
             settings = await get_settings()
             interval = float(settings.get("stock_export_interval", 30))
+            if interval <= 0:
+                # Export disabled; sleep and re-check later
+                await asyncio.sleep(300)
+                continue
             if interval < 1:
                 interval = 1
 
