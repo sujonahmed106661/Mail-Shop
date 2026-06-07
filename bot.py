@@ -2340,8 +2340,8 @@ class AuthMiddleware(BaseMiddleware):
                         elif isinstance(event, CallbackQuery):
                             await event.answer("📢 Please join required channels first.", show_alert=True)
                         return
-                except Exception:
-                    pass  # If force-join check fails, allow access
+                except Exception as e:
+                    logger.warning("Force-join check failed: %s", e)
 
         return await handler(event, data)
 
@@ -2589,6 +2589,7 @@ async def cmd_start(message: Message, state: FSMContext):
             reply_markup=admin_main_kb(),
         )
         return
+    # Note: Middleware also checks force-join, but /start provides richer onboarding UX with inline join buttons
     passed, failed_channels = await check_force_join(message.bot, message.from_user.id)
     if not passed:
         try:
@@ -5901,7 +5902,6 @@ async def admin_remove_bal(message: Message, state: FSMContext):
     data    = await state.get_data()
     uid     = data.get("target_uid")
     target_user = data.get("target_user", {})
-    current_bal = target_user.get("balance", 0)
     new_bal = await update_balance(uid, -amount)
     updated = await get_user(uid)
     await state.update_data(target_user=updated)
