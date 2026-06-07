@@ -1,0 +1,16 @@
+{
+  "project_type": "Python Telegram bot using aiogram 3.x with Firebase Realtime DB",
+  "language": "Python",
+  "build_system": "pip (requirements.txt), Railway deployment",
+  "test_framework": "None (no tests exist)",
+  "build_command": "python -c \"import ast; ast.parse(open('bot.py').read())\"",
+  "test_command": "python -c \"import ast; ast.parse(open('bot.py').read()); print('Syntax OK')\"",
+  "verification_instructions": "1. Run python syntax check on bot.py. 2. Verify no import errors with basic import test.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "pip install -r requirements.txt",
+  "environment_constraints": "INTEGRATIONS_ONLY network - cannot install packages or run the bot. Use AST validation only.",
+  "contribution_requirements": "Single-file bot (bot.py). All code in one file. Reply keyboard only (no inline keyboards for navigation). Firebase Realtime DB for persistence.",
+  "key_patterns": "aiogram 3.x FSM states, Reply Keyboard navigation, unicode bold button text via _b() helper, Firebase CRUD helpers, in-memory sessions for mail/tempmail",
+  "relevant_files": ["bot.py", "requirements.txt"],
+  "directory_structure": "Single-file project: bot.py is the entire application, requirements.txt for deps, Procfile/railway.toml for deployment"
+}
