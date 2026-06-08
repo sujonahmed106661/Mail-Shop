@@ -1,0 +1,7 @@
+{
+  "task_id": "task-fix-hidden-products-and-bugs",
+  "task_description": "Fix product auto-hiding bugs where products become permanently hidden when stock runs out, improve admin UI to show hidden status, and ensure the product import flow works correctly. The bot has bugs where pop_stock_items() and clear_stock() automatically hide products, making them invisible to users even after restocking.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001"],
+  "blocked_reason": null
+}

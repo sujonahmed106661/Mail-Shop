@@ -949,9 +949,9 @@ async def add_stock_items(pid: str, items: List[str]) -> int:
             existing[uuid.uuid4().hex[:16]] = cleaned
     await db_set(f"stocks/{pid}", existing)
     count = len(existing)
-    # Only auto-unhide if product was hidden due to empty stock (before == 0)
+    # Always unhide the product when stock is added
     update_data = {"stock_count": count}
-    if before == 0 and count > 0:
+    if count > 0:
         update_data["hidden"] = False
     await db_update(f"products/{pid}", update_data)
     return count - before  # Return actually added count, not total
@@ -964,12 +964,12 @@ async def pop_stock_items(pid: str, qty: int) -> List[str]:
         del existing[k]
     await db_set(f"stocks/{pid}", existing)
     new_count = len(existing)
-    await db_update(f"products/{pid}", {"stock_count": new_count, "hidden": new_count == 0})
+    await db_update(f"products/{pid}", {"stock_count": new_count})
     return popped
 
 async def clear_stock(pid: str) -> None:
     await db_delete(f"stocks/{pid}")
-    await db_update(f"products/{pid}", {"stock_count": 0, "hidden": True})
+    await db_update(f"products/{pid}", {"stock_count": 0})
 
 async def get_stock_count(pid: str) -> int:
     data = await db_get(f"stocks/{pid}")
@@ -2143,7 +2143,7 @@ def admin_category_kb() -> ReplyKeyboardMarkup:
 
 def admin_products_kb(products: dict) -> ReplyKeyboardMarkup:
     rows = [
-        [f"{p.get('emoji','📦')} {p['name']} [{p.get('category','mail').upper()}] — ${p['price']:.2f}"]
+        [f"{p.get('emoji','📦')} {p['name']} {'🙈 ' if p.get('hidden') else ''}[{p.get('category','mail').upper()}] — ${p['price']:.2f}"]
         for pid, p in products.items()
     ]
     rows.append([BTN_ADD_PRODUCT])
@@ -2153,7 +2153,7 @@ def admin_products_kb(products: dict) -> ReplyKeyboardMarkup:
 
 def build_admin_products_dm(products: dict) -> dict:
     return {
-        f"{p.get('emoji','📦')} {p['name']} [{p.get('category','mail').upper()}] — ${p['price']:.2f}": pid
+        f"{p.get('emoji','📦')} {p['name']} {'🙈 ' if p.get('hidden') else ''}[{p.get('category','mail').upper()}] — ${p['price']:.2f}": pid
         for pid, p in products.items()
     }
 

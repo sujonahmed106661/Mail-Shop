@@ -1,0 +1,16 @@
+{
+  "project_type": "Telegram Bot (aiogram 3.x) with Firebase Realtime Database",
+  "language": "Python",
+  "build_system": "pip install from requirements.txt; runs via Procfile on Railway",
+  "test_framework": "None - no test suite exists",
+  "build_command": "pip install -r requirements.txt && python -c \"import bot\"",
+  "test_command": "python -c \"import bot; print('Import OK')\"",
+  "verification_instructions": "1. Install dependencies with pip. 2. Verify the bot.py file imports cleanly without syntax errors. 3. Verify key functions exist and have correct signatures.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "pip install -r requirements.txt",
+  "environment_constraints": "OPEN_INTERNET network mode. No Firebase connection available for runtime testing. Validation is limited to syntax check and import verification.",
+  "contribution_requirements": "Single file project (bot.py). All changes go into bot.py.",
+  "key_patterns": "1. All buttons use _b() helper for bold Unicode text. 2. Keyboards are built with _kb(*rows) helper. 3. Firebase operations use db_get/db_set/db_update/db_delete async helpers. 4. Admin handlers use AdminFlow states; user handlers use UserFlow states. 5. Products have a 'hidden' boolean field. User-facing listings filter out hidden=True. 6. Stock management: add_stock_items(), pop_stock_items(), clear_stock(). 7. The bot uses reply keyboards exclusively (no inline keyboards for navigation).",
+  "relevant_files": ["bot.py"],
+  "directory_structure": "Single file project: bot.py (6984 lines), requirements.txt, Procfile, railway.toml, README.md"
+}
