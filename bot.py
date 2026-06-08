@@ -882,7 +882,8 @@ async def use_bonus(uid: int, amount: float) -> float:
 def compute_bonus_usage(bonus: dict, pid: str, total: float) -> tuple:
     """Return (bonus_used, remaining_cost) for a purchase."""
     bonus_used = 0.0
-    if pid in bonus.get("allowed_products", []) and bonus.get("amount", 0) > 0:
+    allowed = bonus.get("allowed_products", [])
+    if ("*" in allowed or pid in allowed) and bonus.get("amount", 0) > 0:
         if bonus["amount"] >= total:
             bonus_used = total
         else:
@@ -934,32 +935,12 @@ async def add_referral_earning(referrer_uid: int, amount: float, from_uid: int, 
     await db_update(f"users/{referrer_uid}/referral", {"total_earned": new_total})
 
 
-async def get_referral_surcharge(buyer_uid: int, purchase_amount: float) -> float:
-    """Calculate the hidden referral surcharge for a referred buyer.
-
-    If the buyer was referred by someone, return the commission amount
-    that will be silently added to the purchase cost. Returns 0.0 for
-    non-referred buyers.
-    """
-    try:
-        ref_info = await get_referral_info(buyer_uid)
-        referrer_uid = ref_info.get("referred_by")
-        if referrer_uid:
-            settings = await get_settings()
-            bonus_pct = settings.get("referral_bonus_pct", 5.0)
-            commission = round(purchase_amount * bonus_pct / 100, 4)
-            return commission
-    except Exception:
-        pass
-    return 0.0
-
 
 async def pay_referral_commission(bot: Bot, buyer_uid: int, purchase_amount: float, order_id: str) -> None:
-    """Credit referral commission to the referrer after purchase.
+    """Credit referral bonus to the referrer after purchase.
 
-    The commission has already been silently deducted from the buyer
-    during checkout. This function credits the referrer and sends
-    a notification.
+    The referrer earns a Bonus Balance (not real money) that can only
+    be used as a discount on future purchases.
     """
     try:
         ref_info = await get_referral_info(buyer_uid)
@@ -969,24 +950,18 @@ async def pay_referral_commission(bot: Bot, buyer_uid: int, purchase_amount: flo
             bonus_pct = settings.get("referral_bonus_pct", 5.0)
             commission = round(purchase_amount * bonus_pct / 100, 4)
             if commission > 0:
-                # Credit referrer - funded by the buyer surcharge
-                await update_balance(referrer_uid, commission)
+                # Credit referrer's BONUS balance (not real money)
+                current_bonus = await get_bonus(referrer_uid)
+                new_amount = round(current_bonus["amount"] + commission, 4)
+                await set_bonus(referrer_uid, new_amount, ["*"])
                 await add_referral_earning(referrer_uid, commission, buyer_uid, order_id)
-                # Log for admin tracking
-                await db_push("referral_costs", {
-                    "order_id": order_id,
-                    "buyer_uid": buyer_uid,
-                    "referrer_uid": referrer_uid,
-                    "purchase_amount": purchase_amount,
-                    "commission": commission,
-                    "ts": int(time.time()),
-                })
                 try:
                     await bot.send_message(
                         referrer_uid,
                         f"\U0001f3af <b>Referral Bonus!</b>\n{_SEP}\n"
                         f"Your referral made a purchase.\n"
-                        f"\U0001f4b0 Commission: <b>${commission:.2f}</b> credited to your balance.",
+                        f"\U0001f381 Bonus: <b>${commission:.2f}</b> added to your Bonus Balance.\n"
+                        f"Use it as a discount on your next purchase!",
                     )
                 except Exception:
                     pass
@@ -3280,10 +3255,11 @@ async def show_referral(message: Message):
     link = f"https://t.me/{bot_username}?start=ref_{uid}"
     await message.answer(
         f"🔗 <b>Referral Program</b>\n{_SEP}\n"
-        f"Share your link and earn commission on every purchase your referrals make!\n\n"
+        f"Share your link and earn Bonus Balance on every purchase your referrals make!\n"
+        f"(Bonus can be used as discount on your purchases)\n\n"
         f"🔗 Your Link:\n<code>{link}</code>\n\n"
         f"👥 Total Referred: <b>{ref_info.get('referred_count', 0)}</b>\n"
-        f"💰 Total Earned: <b>${ref_info.get('total_earned', 0.0):.2f}</b>",
+        f"🎁 Bonus Earned: <b>${ref_info.get('total_earned', 0.0):.2f}</b>",
         reply_markup=main_menu_kb(),
     )
 
@@ -4288,9 +4264,7 @@ async def mail_confirm(message: Message, state: FSMContext):
     bonus = await get_bonus(uid)
     bonus_used, remaining_cost = compute_bonus_usage(bonus, pid, total)
 
-    # ── Hidden referral surcharge (applied on cash portion) ──
-    ref_surcharge = await get_referral_surcharge(uid, remaining_cost)
-    actual_deduct = round(remaining_cost + ref_surcharge, 4)
+    actual_deduct = remaining_cost
 
     if balance < actual_deduct:
         await state.clear()
@@ -4675,9 +4649,7 @@ async def vpn_confirm(message: Message, state: FSMContext):
     bonus = await get_bonus(uid)
     bonus_used, remaining_cost = compute_bonus_usage(bonus, vpn_pid, price)
 
-    # ── Hidden referral surcharge (applied on cash portion) ──
-    ref_surcharge = await get_referral_surcharge(uid, remaining_cost)
-    actual_deduct = round(remaining_cost + ref_surcharge, 4)
+    actual_deduct = remaining_cost
 
     if balance < actual_deduct:
         await state.clear()
@@ -4987,9 +4959,7 @@ async def proxy_auto_confirm(message: Message, state: FSMContext):
     bonus = await get_bonus(uid)
     bonus_used, remaining_cost = compute_bonus_usage(bonus, pid, total)
 
-    # ── Hidden referral surcharge (applied on cash portion) ──
-    ref_surcharge = await get_referral_surcharge(uid, remaining_cost)
-    actual_deduct = round(remaining_cost + ref_surcharge, 4)
+    actual_deduct = remaining_cost
 
     if balance < actual_deduct:
         await state.clear()
@@ -5285,9 +5255,7 @@ async def proxy_confirm(message: Message, state: FSMContext):
     bonus = await get_bonus(uid)
     bonus_used, remaining_cost = compute_bonus_usage(bonus, proxy_pid, price)
 
-    # ── Hidden referral surcharge (applied on cash portion) ──
-    ref_surcharge = await get_referral_surcharge(uid, remaining_cost)
-    actual_deduct = round(remaining_cost + ref_surcharge, 4)
+    actual_deduct = remaining_cost
 
     if balance < actual_deduct:
         await state.clear()
@@ -8945,20 +8913,12 @@ async def admin_profit_calc(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     products = await get_all_products()
-    orders, vpn, proxy, ref_costs_data = await asyncio.gather(
+    orders, vpn, proxy = await asyncio.gather(
         db_get("orders"), db_get("vpn_orders"), db_get("proxy_orders"),
-        db_get("referral_costs"),
     )
     orders = orders or {}
     vpn = vpn or {}
     proxy = proxy or {}
-    ref_costs_data = ref_costs_data or {}
-
-    # Calculate total referral costs
-    total_referral_costs = sum(
-        entry.get("commission", 0) for entry in ref_costs_data.values()
-        if isinstance(entry, dict)
-    )
 
     # Calculate per-product revenue
     product_revenue = defaultdict(float)
@@ -8996,12 +8956,11 @@ async def admin_profit_calc(message: Message, state: FSMContext):
                 f"  {_pkg_emoji} <b>{p.get('name', pid)}</b>\n"
                 f"    Revenue: ${rev:.2f} | Cost: ${cost:.2f} | Profit: ${profit:.2f} ({margin:.0f}%)"
             )
-    total_profit = total_revenue - total_cost - total_referral_costs
+    total_profit = total_revenue - total_cost
     overall_margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0
     lines.append(f"\n{_SEP}")
     lines.append(f"\U0001F4B0 <b>Total Revenue:</b> ${total_revenue:.2f}")
     lines.append(f"\U0001F4B8 <b>Total Cost:</b> ${total_cost:.2f}")
-    lines.append(f"\U0001F91D <b>Referral Costs:</b> ${total_referral_costs:.2f}")
     lines.append(f"\U0001F4B9 <b>Net Profit:</b> ${total_profit:.2f}")
     lines.append(f"\U0001F4CA <b>Overall Margin:</b> {overall_margin:.1f}%")
     lines.append(f"\n<i>Set cost per item via:</i> <code>set_cost:PRODUCT_ID:amount</code>")
