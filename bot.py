@@ -661,6 +661,12 @@ BTN_REFERRAL = _b("🔗 Referral")
 BTN_CONFIRM  = _b("✅ Confirm Purchase")
 BTN_COUPON   = _b("🎫 Apply Coupon")
 
+# ── User Panel Enhancement buttons ────────────────────────────────
+BTN_TRENDING    = _b("🔥 Trending")
+BTN_FAVORITES   = _b("⭐ Favorites")
+BTN_MY_STATS    = _b("📊 My Stats")
+BTN_SEARCH      = _b("🔍 Search")
+
 # ── Duration ───────────────────────────────────────────────────────
 BTN_1DAY   = _b("⏱ 1 Day")
 BTN_7DAYS  = _b("⏱ 7 Days")
@@ -1013,6 +1019,7 @@ async def add_stock_items(pid: str, items: List[str]) -> int:
     """Add items to stock. Returns number of items actually added."""
     existing = await db_get(f"stocks/{pid}") or {}
     before = len(existing)
+    was_empty = before == 0
     for raw_item in items:
         cleaned = raw_item.strip()
         if cleaned:
@@ -1024,7 +1031,43 @@ async def add_stock_items(pid: str, items: List[str]) -> int:
     if count > 0:
         update_data["hidden"] = False
     await db_update(f"products/{pid}", update_data)
-    return count - before  # Return actually added count, not total
+    added = count - before
+    # Notify restock subscribers if product was out of stock
+    if was_empty and added > 0:
+        asyncio.create_task(_notify_restock_subscribers(pid))
+    return added  # Return actually added count, not total
+
+
+async def _notify_restock_subscribers(pid: str) -> None:
+    """Notify users who subscribed to restock notifications for this product."""
+    try:
+        from aiogram import Bot as _Bot
+        product = await get_product(pid)
+        if not product:
+            return
+        subscribers = await get_restock_subscribers(pid)
+        if not subscribers:
+            return
+        bot = _Bot.get_current()
+        if not bot:
+            return
+        name = product.get("name", "Unknown")
+        emoji = product.get("emoji", "📦")
+        stock = product.get("stock_count", 0)
+        for uid in subscribers:
+            try:
+                await bot.send_message(
+                    uid,
+                    f"🔔 <b>Restock Alert!</b>\n{_SEP}\n"
+                    f"{emoji} <b>{name}</b> is back in stock!\n"
+                    f"📦 Available: <b>{stock}</b> items\n\n"
+                    f"Hurry up before it sells out!",
+                )
+            except Exception:
+                pass
+        await clear_restock_subscribers(pid)
+    except Exception as e:
+        logger.warning("Restock notification failed: %s", e)
 
 async def pop_stock_items(pid: str, qty: int) -> List[str]:
     existing = await db_get(f"stocks/{pid}") or {}
@@ -1245,6 +1288,82 @@ async def get_all_coupons() -> List[dict]:
 
 async def delete_coupon(coupon_id: str) -> None:
     await db_delete(f"coupons/{coupon_id}")
+
+
+# ══════════════════════════════════════════════════════════════════
+# FIREBASE — VIP System
+# ══════════════════════════════════════════════════════════════════
+
+_VIP_TIERS = [
+    (500, "Diamond", "💠"),
+    (200, "Gold", "🥇"),
+    (50, "Silver", "🥈"),
+    (10, "Bronze", "🥉"),
+]
+
+
+def get_vip_tier(total_spent: float) -> Tuple[str, str]:
+    """Return (tier_name, emoji) based on total_spent. Returns ('', '') if no tier."""
+    for threshold, name, emoji in _VIP_TIERS:
+        if total_spent >= threshold:
+            return name, emoji
+    return "", ""
+
+
+def get_vip_progress(total_spent: float) -> Tuple[str, float, float]:
+    """Return (next_tier_name, current_spent, next_threshold) for progress display."""
+    for i, (threshold, name, _emoji) in enumerate(_VIP_TIERS):
+        if total_spent >= threshold:
+            if i == 0:
+                return "Max", total_spent, threshold
+            prev_threshold = _VIP_TIERS[i - 1][0]
+            return _VIP_TIERS[i - 1][1], total_spent, prev_threshold
+    return "Bronze", total_spent, 10.0
+
+
+# ══════════════════════════════════════════════════════════════════
+# FIREBASE — Favorites
+# ══════════════════════════════════════════════════════════════════
+
+async def get_user_favorites(uid: int) -> List[str]:
+    """Return list of product IDs favorited by user."""
+    data = await db_get(f"users/{uid}/favorites")
+    if not data:
+        return []
+    if isinstance(data, dict):
+        return list(data.keys())
+    return list(data) if isinstance(data, list) else []
+
+
+async def add_user_favorite(uid: int, pid: str) -> None:
+    await db_set(f"users/{uid}/favorites/{pid}", True)
+
+
+async def remove_user_favorite(uid: int, pid: str) -> None:
+    await db_delete(f"users/{uid}/favorites/{pid}")
+
+
+# ══════════════════════════════════════════════════════════════════
+# FIREBASE — Restock Notifications
+# ══════════════════════════════════════════════════════════════════
+
+async def subscribe_restock(pid: str, uid: int) -> None:
+    await db_set(f"restock_subs/{pid}/{uid}", int(time.time()))
+
+
+async def unsubscribe_restock(pid: str, uid: int) -> None:
+    await db_delete(f"restock_subs/{pid}/{uid}")
+
+
+async def get_restock_subscribers(pid: str) -> List[int]:
+    data = await db_get(f"restock_subs/{pid}")
+    if not data:
+        return []
+    return [int(uid) for uid in data.keys()]
+
+
+async def clear_restock_subscribers(pid: str) -> None:
+    await db_delete(f"restock_subs/{pid}")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1656,11 +1775,15 @@ def fmt_balance_screen(user: dict) -> str:
     bonus_line = ""
     if bonus and bonus.get("amount", 0) > 0:
         bonus_line = f"🎁 Bonus Balance: <b>${bonus['amount']:.2f}</b>\n"
+    total_spent = user.get("total_spent", 0)
+    tier_name, tier_emoji = get_vip_tier(total_spent)
+    vip_line = f"{tier_emoji} VIP: <b>{tier_name}</b>\n" if tier_name else ""
     return (
         f"💰 <b>My Balance</b>\n{_SEP}\n"
         f"👤 <b>{user.get('full_name', 'User')}</b>\n"
         f"🆔 ID: <code>{user['user_id']}</code>\n"
         f"📛 @{user.get('username') or 'no username'}\n"
+        f"{vip_line}"
         f"{_LINE}\n"
         f"💵 Balance: <b>${user.get('balance', 0):.2f}</b>\n"
         f"{bonus_line}"
@@ -2085,6 +2208,12 @@ class UserFlow(StatesGroup):
     # Temp Mail flow
     temp_mail_menu   = State()
     temp_mail_domain = State()
+    # User Panel Enhancements
+    favorites_menu       = State()
+    search_services      = State()
+    order_tracking       = State()
+    user_stats           = State()
+    repeat_order_confirm = State()
 
 class AdminFlow(StatesGroup):
     menu              = State()
@@ -2147,6 +2276,8 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         [BTN_GET_MAIL,  BTN_TEMP_MAIL],
         [BTN_BUY_VPN,   BTN_BUY_PROXY],
         [BTN_GET_CODE,  BTN_GET_2FA],
+        [BTN_TRENDING,  BTN_FAVORITES],
+        [BTN_SEARCH,    BTN_MY_STATS],
         [BTN_HISTORY,   BTN_SUPPORT],
         [BTN_REFERRAL],
     )
@@ -2638,8 +2769,26 @@ async def send_main_menu(message: Message, state: FSMContext, text: Optional[str
     shop_name = settings.get("shop_name", "🛍 Neroxa Shop")
     welcome   = settings.get("welcome_message", WELCOME_MSG)
     balance   = user.get("balance", 0)
-    display   = text or fmt_welcome(shop_name, welcome, message.from_user.first_name, balance)
+    total_spent = user.get("total_spent", 0)
+    tier_name, tier_emoji = get_vip_tier(total_spent)
+    vip_line = f"\n{tier_emoji} VIP: <b>{tier_name}</b>" if tier_name else ""
+    display = text or (
+        f"<b>{shop_name}</b>\n"
+        f"{_SEP}\n"
+        f"{welcome}\n\n"
+        f"👋 Welcome back, <b>{message.from_user.first_name}</b>!{vip_line}\n"
+        f"💰 Balance: <b>${balance:.2f}</b>"
+    )
+    # Quick access inline shortcuts
+    quick_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📨 Buy Mail", callback_data="quick:mail"),
+            InlineKeyboardButton(text="💎 Balance", callback_data="quick:balance"),
+            InlineKeyboardButton(text="📋 Last Order", callback_data="quick:lastorder"),
+        ]
+    ])
     await message.answer(display, reply_markup=main_menu_kb())
+    await message.answer("⚡ <b>Quick Access</b>", reply_markup=quick_kb)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3301,6 +3450,31 @@ async def order_history(message: Message):
         get_user_orders(uid), get_user_vpn_orders(uid), get_user_proxy_orders(uid),
     )
     await message.answer(fmt_order_history(mail_o, vpn_o, proxy_o), reply_markup=main_menu_kb())
+    # Inline buttons for repeat order and order tracking
+    inline_buttons = []
+    if mail_o:
+        o = mail_o[0]
+        inline_buttons.append([InlineKeyboardButton(
+            text=f"🔄 Repeat: {o['product_name']} x{o['qty']}",
+            callback_data=f"repeat_order:mail:{o['order_id']}",
+        )])
+    for o in (vpn_o or [])[:2]:
+        if o.get("status") == "pending":
+            inline_buttons.append([InlineKeyboardButton(
+                text=f"📦 Track: {o['order_id']}",
+                callback_data=f"track_order:vpn:{o['order_id']}",
+            )])
+    for o in (proxy_o or [])[:2]:
+        if o.get("status") == "pending":
+            inline_buttons.append([InlineKeyboardButton(
+                text=f"📦 Track: {o['order_id']}",
+                callback_data=f"track_order:proxy:{o['order_id']}",
+            )])
+    if inline_buttons:
+        await message.answer(
+            "⚡ <b>Quick Actions</b>",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_buttons),
+        )
     deposits = await get_user_deposits(uid)
     if deposits:
         await message.answer(fmt_deposit_history(deposits))
@@ -3344,6 +3518,502 @@ async def _check_low_stock_alert(bot: Bot, pid: str, product_name: str) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════
+# ROUTER — User Panel Enhancements
+# ══════════════════════════════════════════════════════════════════
+
+router_user_panel = Router()
+
+
+# ── VIP Badge display helper ──────────────────────────────────────
+
+def _vip_badge_line(total_spent: float) -> str:
+    tier_name, tier_emoji = get_vip_tier(total_spent)
+    if not tier_name:
+        return ""
+    return f"{tier_emoji} VIP: <b>{tier_name}</b>"
+
+
+# ── Trending Services ─────────────────────────────────────────────
+
+@router_user_panel.message(F.text == BTN_TRENDING)
+async def show_trending(message: Message):
+    orders_data, vpn_data, proxy_data, products = await asyncio.gather(
+        db_get("orders"), db_get("vpn_orders"), db_get("proxy_orders"), get_all_products(),
+    )
+    now = int(time.time())
+    week_ago = now - 7 * 86400
+    purchase_counts: Dict[str, int] = defaultdict(int)
+    for v in (orders_data or {}).values():
+        if v.get("created_at", 0) >= week_ago:
+            pid = v.get("product_id", "")
+            if pid:
+                purchase_counts[pid] += v.get("qty", 1)
+    for v in (vpn_data or {}).values():
+        if v.get("created_at", 0) >= week_ago and v.get("status") != "cancelled":
+            pid = v.get("product_id", "")
+            if pid:
+                purchase_counts[pid] += 1
+    for v in (proxy_data or {}).values():
+        if v.get("created_at", 0) >= week_ago and v.get("status") != "cancelled":
+            pid = v.get("product_id", "")
+            if pid:
+                purchase_counts[pid] += 1
+    if not purchase_counts:
+        await message.answer(
+            f"🔥 <b>Trending Services</b>\n{_SEP}\n"
+            f"No trending data yet this week.\nCheck back soon!",
+            reply_markup=main_menu_kb(),
+        )
+        return
+    top5 = sorted(purchase_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+    lines = [f"🔥 <b>Trending Services</b> (Last 7 Days)\n{_SEP}"]
+    for rank, (pid, count) in enumerate(top5, 1):
+        p = products.get(pid, {})
+        name = p.get("name", "Unknown")
+        emoji = p.get("emoji", "📦")
+        status_dot = "🟢" if p.get("status", "online") == "online" else "🔴"
+        price = p.get("price", 0)
+        lines.append(f"\n{rank}. {status_dot} {emoji} <b>{name}</b>")
+        lines.append(f"   💰 ${price:.2f} | 🔥 {count} purchases")
+    await message.answer("\n".join(lines), reply_markup=main_menu_kb())
+
+
+# ── Favorites ─────────────────────────────────────────────────────
+
+@router_user_panel.message(F.text == BTN_FAVORITES)
+async def show_favorites(message: Message, state: FSMContext):
+    uid = message.from_user.id
+    fav_pids = await get_user_favorites(uid)
+    if not fav_pids:
+        await message.answer(
+            f"⭐ <b>My Favorites</b>\n{_SEP}\n"
+            f"You have no favorite products yet.\n\n"
+            f"Browse products and tap the star button to add favorites!",
+            reply_markup=main_menu_kb(),
+        )
+        return
+    products = await get_all_products()
+    lines = [f"⭐ <b>My Favorites</b>\n{_SEP}"]
+    buttons = []
+    for pid in fav_pids:
+        p = products.get(pid)
+        if not p:
+            continue
+        status_dot = "🟢" if p.get("status", "online") == "online" else "🔴"
+        stock = p.get("stock_count", 0)
+        lines.append(f"\n{status_dot} {p.get('emoji','📦')} <b>{p['name']}</b>")
+        lines.append(f"   💰 ${p['price']:.2f} | 📦 {stock} in stock")
+        buttons.append([
+            InlineKeyboardButton(text=f"🛒 Buy {p['name']}", callback_data=f"fav_buy:{pid}"),
+            InlineKeyboardButton(text="❌ Remove", callback_data=f"fav_rm:{pid}"),
+        ])
+    if not buttons:
+        await message.answer(
+            f"⭐ <b>My Favorites</b>\n{_SEP}\n"
+            f"Your favorited products are no longer available.",
+            reply_markup=main_menu_kb(),
+        )
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("\n".join(lines), reply_markup=kb)
+
+
+@router_user_panel.callback_query(F.data.startswith("fav_rm:"))
+async def fav_remove_cb(callback: CallbackQuery):
+    pid = callback.data.split(":", 1)[1]
+    uid = callback.from_user.id
+    await remove_user_favorite(uid, pid)
+    await callback.answer("Removed from favorites!")
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+
+@router_user_panel.callback_query(F.data.startswith("fav_buy:"))
+async def fav_buy_cb(callback: CallbackQuery, state: FSMContext):
+    pid = callback.data.split(":", 1)[1]
+    product = await get_product(pid)
+    if not product:
+        await callback.answer("Product not found!", show_alert=True)
+        return
+    cat = product.get("category", "mail")
+    stock = await get_stock_count(pid)
+    if stock == 0 and cat == "mail":
+        await callback.answer("Out of stock!", show_alert=True)
+        return
+    await callback.answer(f"Opening {product['name']}...")
+    # Redirect to the appropriate product flow based on category
+    if cat == "mail":
+        products = await get_all_products()
+        dm = {
+            f"{p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid_
+            for pid_, p in products.items()
+            if p.get("category", "mail") == "mail" and not p.get("hidden")
+        }
+        await state.update_data(dm=dm, pid=pid, product=product, stock=stock)
+        await state.set_state(UserFlow.mail_qty)
+        await callback.message.answer(
+            f"{product.get('emoji','📮')} <b>{product['name']}</b>\n{_SEP}\n"
+            f"💰 Price: <b>${product['price']:.2f}</b>/unit\n"
+            f"📦 In Stock: <b>{stock}</b>\n\n"
+            f"Enter quantity:",
+            reply_markup=input_kb(),
+        )
+    else:
+        await callback.message.answer(
+            f"Please use the main menu to purchase {product['name']}.",
+            reply_markup=main_menu_kb(),
+        )
+
+
+@router_user_panel.callback_query(F.data.startswith("fav_add:"))
+async def fav_add_cb(callback: CallbackQuery):
+    pid = callback.data.split(":", 1)[1]
+    uid = callback.from_user.id
+    await add_user_favorite(uid, pid)
+    await callback.answer("Added to favorites! ⭐", show_alert=True)
+
+
+# ── Restock Notifications ─────────────────────────────────────────
+
+@router_user_panel.callback_query(F.data.startswith("restock_sub:"))
+async def restock_subscribe_cb(callback: CallbackQuery):
+    pid = callback.data.split(":", 1)[1]
+    uid = callback.from_user.id
+    await subscribe_restock(pid, uid)
+    await callback.answer("You'll be notified when this product is restocked! 🔔", show_alert=True)
+
+
+@router_user_panel.callback_query(F.data.startswith("restock_unsub:"))
+async def restock_unsubscribe_cb(callback: CallbackQuery):
+    pid = callback.data.split(":", 1)[1]
+    uid = callback.from_user.id
+    await unsubscribe_restock(pid, uid)
+    await callback.answer("Unsubscribed from restock notifications.", show_alert=True)
+
+
+# ── One-Click Repeat Order ────────────────────────────────────────
+
+@router_user_panel.callback_query(F.data.startswith("repeat_order:"))
+async def repeat_order_cb(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split(":", 2)
+    if len(parts) < 3:
+        await callback.answer("Invalid order data.", show_alert=True)
+        return
+    order_type = parts[1]
+    order_id = parts[2]
+    if order_type == "mail":
+        data = await db_get(f"orders/{order_id}")
+        if not data:
+            await callback.answer("Order not found.", show_alert=True)
+            return
+        pid = data.get("product_id")
+        product = await get_product(pid)
+        if not product:
+            await callback.answer("Product no longer exists.", show_alert=True)
+            return
+        stock = await get_stock_count(pid)
+        qty = data.get("qty", 1)
+        if stock < qty:
+            await callback.answer(f"Not enough stock (need {qty}, have {stock}).", show_alert=True)
+            return
+        products = await get_all_products()
+        dm = {
+            f"{p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid_
+            for pid_, p in products.items()
+            if p.get("category", "mail") == "mail" and not p.get("hidden")
+        }
+        total = product["price"] * qty
+        await state.update_data(dm=dm, pid=pid, product=product, stock=stock, qty=qty, total=total)
+        await state.set_state(UserFlow.mail_coupon)
+        await callback.message.answer(
+            f"🔄 <b>Repeat Order</b>\n{_SEP}\n"
+            f"{product.get('emoji','📮')} {product['name']}\n"
+            f"📦 Qty: <b>{qty}</b>\n"
+            f"💰 Total: <b>${total:.2f}</b>\n\n"
+            f"Press Confirm to proceed or Back to cancel.",
+            reply_markup=confirm_kb(),
+        )
+        await callback.answer("Order loaded!")
+    elif order_type == "vpn":
+        data = await db_get(f"vpn_orders/{order_id}")
+        if not data:
+            await callback.answer("Order not found.", show_alert=True)
+            return
+        await callback.answer("Please use Buy VPN from the main menu.", show_alert=True)
+    else:
+        await callback.answer("Please use the main menu to reorder.", show_alert=True)
+
+
+# ── Advanced Service Search ───────────────────────────────────────
+
+@router_user_panel.message(F.text == BTN_SEARCH)
+async def search_start(message: Message, state: FSMContext):
+    await state.set_state(UserFlow.search_services)
+    await message.answer(
+        f"🔍 <b>Search Services</b>\n{_SEP}\n"
+        f"Type a product name to search.\n"
+        f"Example: <i>Gmail, VPN, Proxy</i>\n\n"
+        f"Press {HOME_BTN} to cancel.",
+        reply_markup=input_kb(),
+    )
+
+
+@router_user_panel.message(UserFlow.search_services)
+async def search_query(message: Message, state: FSMContext):
+    if message.text in (CANCEL_BTN, BACK_BTN, HOME_BTN):
+        await state.clear()
+        await send_main_menu(message, state)
+        return
+    query = message.text.strip().lower()
+    if not query or len(query) < 2:
+        await message.answer("Please enter at least 2 characters to search.", reply_markup=input_kb())
+        return
+    products = await get_all_products()
+    results = []
+    for pid, p in products.items():
+        if p.get("hidden"):
+            continue
+        name = p.get("name", "").lower()
+        desc = p.get("description", "").lower()
+        if query in name or query in desc:
+            results.append((pid, p))
+    if not results:
+        await message.answer(
+            f"🔍 No results for '<b>{html_lib.escape(query)}</b>'\n\nTry a different keyword.",
+            reply_markup=input_kb(),
+        )
+        return
+    lines = [f"🔍 <b>Search Results</b> for '{html_lib.escape(query)}'\n{_SEP}"]
+    buttons = []
+    for pid, p in results[:10]:
+        status_dot = "🟢" if p.get("status", "online") == "online" else "🔴"
+        stock = p.get("stock_count", 0)
+        lines.append(f"\n{status_dot} {p.get('emoji','📦')} <b>{p['name']}</b>")
+        lines.append(f"   💰 ${p['price']:.2f} | 📦 {stock} in stock")
+        buttons.append([
+            InlineKeyboardButton(text=f"🛒 {p['name']}", callback_data=f"search_buy:{pid}"),
+            InlineKeyboardButton(text="⭐", callback_data=f"fav_add:{pid}"),
+        ])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("\n".join(lines), reply_markup=kb)
+
+
+@router_user_panel.callback_query(F.data.startswith("search_buy:"))
+async def search_buy_cb(callback: CallbackQuery, state: FSMContext):
+    pid = callback.data.split(":", 1)[1]
+    product = await get_product(pid)
+    if not product:
+        await callback.answer("Product not found!", show_alert=True)
+        return
+    cat = product.get("category", "mail")
+    if cat == "mail":
+        stock = await get_stock_count(pid)
+        if stock == 0:
+            await callback.answer("Out of stock!", show_alert=True)
+            return
+        products = await get_all_products()
+        dm = {
+            f"{p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid_
+            for pid_, p in products.items()
+            if p.get("category", "mail") == "mail" and not p.get("hidden")
+        }
+        await state.update_data(dm=dm, pid=pid, product=product, stock=stock)
+        await state.set_state(UserFlow.mail_qty)
+        await callback.message.answer(
+            f"{product.get('emoji','📮')} <b>{product['name']}</b>\n{_SEP}\n"
+            f"💰 Price: <b>${product['price']:.2f}</b>/unit\n"
+            f"📦 In Stock: <b>{stock}</b>\n\nEnter quantity:",
+            reply_markup=input_kb(),
+        )
+        await callback.answer()
+    else:
+        await callback.answer(f"Use the main menu to buy {product['name']}.", show_alert=True)
+
+
+# ── Real-time Order Tracking ──────────────────────────────────────
+
+@router_user_panel.callback_query(F.data.startswith("track_order:"))
+async def track_order_cb(callback: CallbackQuery):
+    parts = callback.data.split(":", 2)
+    if len(parts) < 3:
+        await callback.answer("Invalid order.", show_alert=True)
+        return
+    order_type = parts[1]
+    order_id = parts[2]
+    if order_type == "vpn":
+        data = await db_get(f"vpn_orders/{order_id}")
+    elif order_type == "proxy":
+        data = await db_get(f"proxy_orders/{order_id}")
+    else:
+        await callback.answer("Unknown order type.", show_alert=True)
+        return
+    if not data:
+        await callback.answer("Order not found.", show_alert=True)
+        return
+    status = data.get("status", "pending")
+    status_map = {
+        "pending": "⏳ Pending - Awaiting fulfillment",
+        "processing": "🔄 Processing - Being set up",
+        "delivered": "✅ Delivered - Complete",
+        "cancelled": "❌ Cancelled",
+    }
+    status_text = status_map.get(status, f"❓ {status}")
+    progress = {"pending": "▓░░░░", "processing": "▓▓▓░░", "delivered": "▓▓▓▓▓", "cancelled": "XXXXX"}
+    bar = progress.get(status, "░░░░░")
+    text = (
+        f"📦 <b>Order Tracking</b>\n{_SEP}\n"
+        f"🆔 Order: <code>{order_id}</code>\n"
+        f"📋 Product: <b>{data.get('product_name', 'N/A')}</b>\n"
+        f"💰 Price: <b>${data.get('price', 0):.2f}</b>\n"
+        f"{_LINE}\n"
+        f"Status: {status_text}\n"
+        f"[{bar}]\n"
+        f"{_LINE}\n"
+        f"📅 Created: {_dt(data.get('created_at', 0))}"
+    )
+    await callback.message.edit_text(text, parse_mode="HTML")
+    await callback.answer()
+
+
+# ── Live User Statistics Dashboard ────────────────────────────────
+
+@router_user_panel.message(F.text == BTN_MY_STATS)
+async def show_user_stats(message: Message):
+    uid = message.from_user.id
+    user = await get_user(uid) or {}
+    total_spent = user.get("total_spent", 0)
+    order_count = user.get("order_count", 0)
+    balance = user.get("balance", 0)
+    # VIP info
+    tier_name, tier_emoji = get_vip_tier(total_spent)
+    next_tier, current, next_threshold = get_vip_progress(total_spent)
+    # VIP progress bar
+    if next_tier == "Max":
+        vip_bar = "▓▓▓▓▓▓▓▓▓▓ MAX"
+    else:
+        pct = min(current / next_threshold, 1.0) if next_threshold > 0 else 0
+        filled = round(pct * 10)
+        vip_bar = "▓" * filled + "░" * (10 - filled) + f" ${current:.0f}/${next_threshold:.0f}"
+    vip_line = f"{tier_emoji} <b>{tier_name}</b>" if tier_name else "No VIP tier yet"
+    # Weekly spending
+    orders_data, vpn_data, proxy_data = await asyncio.gather(
+        db_get("orders"), db_get("vpn_orders"), db_get("proxy_orders"),
+    )
+    now = int(time.time())
+    this_week = now - 7 * 86400
+    last_week_start = now - 14 * 86400
+    week_spend = 0.0
+    last_week_spend = 0.0
+    for v in (orders_data or {}).values():
+        if v.get("user_id") != uid:
+            continue
+        ts = v.get("created_at", 0)
+        amt = v.get("total_price", 0)
+        if ts >= this_week:
+            week_spend += amt
+        elif ts >= last_week_start:
+            last_week_spend += amt
+    for src in (vpn_data or {}, proxy_data or {}):
+        for v in src.values():
+            if v.get("user_id") != uid or v.get("status") == "cancelled":
+                continue
+            ts = v.get("created_at", 0)
+            amt = v.get("price", 0)
+            if ts >= this_week:
+                week_spend += amt
+            elif ts >= last_week_start:
+                last_week_spend += amt
+    if last_week_spend > 0:
+        trend = ((week_spend - last_week_spend) / last_week_spend) * 100
+        trend_str = f"{'📈' if trend >= 0 else '📉'} {trend:+.0f}% vs last week"
+    else:
+        trend_str = "📊 No comparison data"
+    # Favorite category
+    cat_counts: Dict[str, int] = defaultdict(int)
+    for v in (orders_data or {}).values():
+        if v.get("user_id") == uid:
+            cat_counts["mail"] += 1
+    for v in (vpn_data or {}).values():
+        if v.get("user_id") == uid:
+            cat_counts["vpn"] += 1
+    for v in (proxy_data or {}).values():
+        if v.get("user_id") == uid:
+            cat_counts["proxy"] += 1
+    fav_cat = max(cat_counts, key=cat_counts.get) if cat_counts else "None"
+    cat_emojis = {"mail": "📨", "vpn": "🛡", "proxy": "🌍", "None": "❓"}
+    text = (
+        f"📊 <b>My Statistics</b>\n{_SEP}\n\n"
+        f"👤 <b>{user.get('full_name', 'User')}</b>\n"
+        f"💎 VIP Status: {vip_line}\n"
+        f"[{vip_bar}]\n"
+        f"{_LINE}\n"
+        f"💵 Balance: <b>${balance:.2f}</b>\n"
+        f"💸 Total Spent: <b>${total_spent:.2f}</b>\n"
+        f"🛍 Total Orders: <b>{order_count}</b>\n"
+        f"{_LINE}\n"
+        f"📅 This Week: <b>${week_spend:.2f}</b>\n"
+        f"{trend_str}\n"
+        f"{_LINE}\n"
+        f"{cat_emojis.get(fav_cat, '📦')} Favorite Category: <b>{fav_cat.title()}</b>\n"
+        f"📅 Member Since: {_dt(user.get('joined_at', int(time.time())))}"
+    )
+    await message.answer(text, reply_markup=main_menu_kb())
+
+
+# ── Quick Access Shortcuts (inline callbacks from welcome message) ──
+
+@router_user_panel.callback_query(F.data == "quick:mail")
+async def quick_mail_cb(callback: CallbackQuery, state: FSMContext):
+    products = await get_all_products()
+    dm = {
+        f"{p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid
+        for pid, p in products.items()
+        if p.get("category", "mail") == "mail" and not p.get("hidden")
+    }
+    if not dm:
+        await callback.answer("No mail products available.", show_alert=True)
+        return
+    await state.update_data(dm=dm)
+    await state.set_state(UserFlow.mail_product)
+    await callback.message.answer(
+        f"📮 <b>Mail Products</b>\n{_SEP}\nSelect a product:",
+        reply_markup=products_kb(dm),
+    )
+    await callback.answer()
+
+
+@router_user_panel.callback_query(F.data == "quick:balance")
+async def quick_balance_cb(callback: CallbackQuery):
+    user = await get_user(callback.from_user.id) or {}
+    await callback.message.answer(fmt_balance_screen(user), reply_markup=main_menu_kb())
+    await callback.answer()
+
+
+@router_user_panel.callback_query(F.data == "quick:lastorder")
+async def quick_lastorder_cb(callback: CallbackQuery):
+    uid = callback.from_user.id
+    mail_o = await get_user_orders(uid)
+    if mail_o:
+        o = mail_o[0]
+        await callback.message.answer(
+            f"📋 <b>Last Order</b>\n{_SEP}\n"
+            f"🆔 <code>{o['order_id']}</code>\n"
+            f"📦 {o['product_name']} x{o['qty']}\n"
+            f"💰 ${o['total_price']:.2f}\n"
+            f"📅 {_dt(o.get('created_at', 0))}",
+            reply_markup=main_menu_kb(),
+        )
+    else:
+        await callback.message.answer(
+            f"📋 <b>No Orders Yet</b>\n{_SEP}\nYou haven't placed any orders.",
+            reply_markup=main_menu_kb(),
+        )
+    await callback.answer()
+
+
+# ══════════════════════════════════════════════════════════════════
 # ROUTER — Mail (auto-delivery)
 # ══════════════════════════════════════════════════════════════════
 
@@ -3354,7 +4024,7 @@ router_mail = Router()
 async def mail_start(message: Message, state: FSMContext):
     products = await get_all_products()
     dm = {
-        f"{p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid
+        f"{'🟢' if p.get('status','online')=='online' else '🔴'} {p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid
         for pid, p in products.items()
         if p.get("category", "mail") == "mail" and not p.get("hidden")
     }
@@ -3386,11 +4056,17 @@ async def mail_product_selected(message: Message, state: FSMContext):
         return
     stock = await get_stock_count(pid)
     if stock == 0:
+        notify_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔔 Notify Me When Restocked", callback_data=f"restock_sub:{pid}")],
+            [InlineKeyboardButton(text="⭐ Add to Favorites", callback_data=f"fav_add:{pid}")],
+        ])
         await message.answer(
             f"❌ <b>Out of Stock</b>\n{_SEP}\n"
-            f"{product.get('emoji','📦')} {product['name']} is currently out of stock.\nCheck back later!",
-            reply_markup=main_menu_kb(),
+            f"{product.get('emoji','📦')} {product['name']} is currently out of stock.\n"
+            f"Tap below to get notified when it's back!",
+            reply_markup=notify_kb,
         )
+        await message.answer("Use the menu to browse other products.", reply_markup=main_menu_kb())
         await state.clear()
         return
     await state.update_data(pid=pid, product=product, stock=stock)
@@ -7277,6 +7953,7 @@ def build_dp() -> Dispatcher:
 
     dp.include_router(router_global)   # HOME first — highest priority
     dp.include_router(router_admin)    # Admin before user so AdminFlow states take priority
+    dp.include_router(router_user_panel)  # User panel enhancements (before router_start for callbacks)
     dp.include_router(router_start)
     dp.include_router(router_mail)
     dp.include_router(router_vpn)
