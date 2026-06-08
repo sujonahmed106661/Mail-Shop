@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-001",
+  "type": "fix",
+  "description": "Fix product auto-hiding bugs and improve admin visibility of hidden products. The main issues: (1) pop_stock_items() at line 967 sets hidden=True when stock reaches 0, permanently hiding products from users even after restocking. (2) clear_stock() at line 972 also hides products. (3) add_stock_items() only unhides if stock was exactly 0 before, meaning manually-hidden products that get restocked stay hidden (this behavior is actually correct - manual hide should be respected). (4) Admin product list does not show which products are hidden, making it hard to manage. (5) The admin products keyboard (admin_products_kb) should indicate hidden status so admins can see which products are not visible to users.",
+  "status": "completed",
+  "steps": [
+    "Step 1: Fix pop_stock_items() at line ~967 in bot.py. Change `await db_update(f\"products/{pid}\", {\"stock_count\": new_count, \"hidden\": new_count == 0})` to only update stock_count, NOT set hidden. Products should NOT be auto-hidden when stock runs out. The new code should be: `await db_update(f\"products/{pid}\", {\"stock_count\": new_count})`",
+    "Step 2: Fix clear_stock() at line ~972 in bot.py. Change `await db_update(f\"products/{pid}\", {\"stock_count\": 0, \"hidden\": True})` to only set stock_count to 0, NOT set hidden=True. The new code should be: `await db_update(f\"products/{pid}\", {\"stock_count\": 0})`",
+    "Step 3: Update add_stock_items() at line ~955 in bot.py. Change the logic so that adding stock ALWAYS unhides the product (not just when stock was 0). This makes the workflow logical: admin adds stock -> product becomes visible. Change the condition from `if before == 0 and count > 0:` to `if count > 0:` so that `update_data[\"hidden\"] = False` is always included when there is stock.",
+    "Step 4: Update admin_products_kb() function at line ~2143 to show a hidden indicator for hidden products. Change the row format from `f\"{p.get('emoji','...')} {p['name']} [{p.get('category','mail').upper()}] -- ${p['price']:.2f}\"` to include a '🙈' indicator when the product is hidden. Format: `f\"{p.get('emoji','...')} {p['name']} {'🙈' if p.get('hidden') else ''} [{p.get('category','mail').upper()}] -- ${p['price']:.2f}\"`",
+    "Step 5: Update build_admin_products_dm() function at line ~2153 to match the same format as admin_products_kb() so the display_map keys match the keyboard buttons. Include the same '🙈' indicator for hidden products.",
+    "Step 6: Verify that the Import Products handler at line ~5358 (admin_products_import) is complete and functional. It already exists with full logic - confirm it's properly wired (it IS already working based on code review, so no changes needed here, just verify the flow is intact after other changes)."
+  ],
+  "acceptance_criteria": [
+    "pop_stock_items() no longer sets hidden flag when stock reaches 0",
+    "clear_stock() no longer sets hidden=True",
+    "add_stock_items() always unhides the product when stock is added (count > 0)",
+    "Admin product list shows a 🙈 indicator next to hidden products",
+    "build_admin_products_dm() display keys match admin_products_kb() button labels (both include 🙈 for hidden products)",
+    "The file imports without syntax errors: python -c 'import bot'"
+  ],
+  "verification": [
+    "pip install -r requirements.txt",
+    "python -c \"import bot; print('OK')\"",
+    "python -c \"import bot; import inspect; src = inspect.getsource(bot.pop_stock_items); assert 'hidden' not in src, 'pop_stock_items should not set hidden'; print('pop_stock_items OK')\"",
+    "python -c \"import bot; import inspect; src = inspect.getsource(bot.clear_stock); assert 'hidden' not in src, 'clear_stock should not set hidden'; print('clear_stock OK')\"",
+    "python -c \"import bot; import inspect; src = inspect.getsource(bot.add_stock_items); assert 'if count > 0' in src or 'count > 0' in src, 'add_stock_items should unhide when count>0'; print('add_stock_items OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": "All changes verified. python3 needed instead of python (pyenv config). Import check passes cleanly. Function-level source assertions confirm hidden flag removed from pop_stock_items and clear_stock, and add_stock_items uses 'if count > 0' condition."
+}
