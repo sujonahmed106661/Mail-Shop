@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-003",
+  "type": "fix",
+  "description": "Convert the referral system from a hidden surcharge model to a Bonus Balance model. Nobody loses real money: the shop owner does not pay extra, the referred user does not pay extra. Instead, when a referred user makes a purchase, the referrer earns a small Bonus Balance (usable only as a discount on future purchases, cannot be withdrawn). Use the existing bonus system (get_bonus, set_bonus, use_bonus, compute_bonus_usage). Also update compute_bonus_usage to support a wildcard '*' in allowed_products so referral bonus works on ALL products.",
+  "status": "completed",
+  "steps": [
+    "Modify compute_bonus_usage() (line ~877) to check for '*' wildcard: if '*' is in bonus.get('allowed_products', []), allow bonus usage on any product. Change the condition from 'if pid in bonus.get(\"allowed_products\", [])' to 'if (\"*\" in bonus.get(\"allowed_products\", []) or pid in bonus.get(\"allowed_products\", []))' so bonus works universally for referral rewards.",
+    "Remove get_referral_surcharge() function entirely (lines ~932-948). It calculated hidden surcharge on buyers.",
+    "Modify pay_referral_commission() (lines ~951-990): Instead of crediting real balance via update_balance(), add to referrer's bonus balance using get_bonus() and set_bonus(). The commission amount stays the same (referral_bonus_pct % of purchase), but goes to bonus not real balance. Update the notification message to say 'Bonus Balance' instead of 'credited to your balance'. Remove the 'referral_costs' db_push logging. Keep add_referral_earning() for tracking.",
+    "In the purchase confirmation flow (around line 4679-4681): Remove the hidden referral surcharge logic. Remove 'ref_surcharge = await get_referral_surcharge(uid, remaining_cost)' and change 'actual_deduct = round(remaining_cost + ref_surcharge, 4)' to simply 'actual_deduct = remaining_cost'. The buyer now pays exactly the product price (minus any bonus), no hidden extra.",
+    "Update the referral info display (if any) to show bonus earned instead of balance earned. Search for where referral total_earned is displayed and update text to clarify it is Bonus Balance.",
+    "In pay_referral_commission(): when adding bonus, get current bonus first with get_bonus(referrer_uid), then set new amount = current_bonus['amount'] + commission, and use allowed_products=['*'] so the bonus works on all products. Use set_bonus(referrer_uid, new_amount, ['*'])."
+  ],
+  "acceptance_criteria": [
+    "get_referral_surcharge() function no longer exists",
+    "No 'referral_costs' db_push in the codebase",
+    "pay_referral_commission() uses set_bonus() instead of update_balance()",
+    "compute_bonus_usage() supports '*' wildcard in allowed_products",
+    "Purchase flow does not add any surcharge - buyer pays exact product price minus any personal bonus",
+    "AST validation passes",
+    "Referrer notification mentions 'Bonus Balance' not regular balance"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+    "grep 'get_referral_surcharge' bot.py should return no matches",
+    "grep 'referral_costs' bot.py should return no matches",
+    "grep 'set_bonus' bot.py should show usage in pay_referral_commission",
+    "grep 'ref_surcharge' bot.py should return no matches"
+  ],
+  "blocked_reason": null,
+  "findings": "All changes verified. Removed get_referral_surcharge entirely. Converted pay_referral_commission to use set_bonus with wildcard ['*']. Removed surcharge from 4 purchase flows (2 mail, 1 VPN, 1 proxy). Removed referral_costs from admin profit report. Updated referral display text. AST validation passes."
+}

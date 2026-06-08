@@ -1,0 +1,40 @@
+{
+  "id": "FEAT-001",
+  "type": "fix",
+  "description": "Remove the ugly _card() box-drawing system and revert all format functions to the original clean style using _SEP separators and <b>title</b> headers. Also add AI Support feature and fix code issues.",
+  "status": "completed",
+  "steps": [
+    "STEP 1 - Remove _card() system: Delete the `_CARD_W = 24` constant (line 1852) and the `_card()` function definition (lines 1854-1866). Keep `_progress_bar()`, `_mini_chart()`, `_status_dot()` as they are useful. Remove `_quick_actions_inline()` and `_responsive_kb()` functions since they are not needed for reply-keyboard-only approach (though _responsive_kb is used, so keep it if called elsewhere).",
+    "STEP 2 - Rewrite fmt_welcome to simple style: Replace the _card()-based version with a clean format like: f\"<b>{shop_name}</b>\\n{_SEP}\\n{welcome}\\n\\n👤 <b>{first_name}</b>{vip_badge}\\n💰 Balance: <code>${balance:.2f}</code>\\n🛒 Orders: <b>{order_count}</b>\\n{_SEP}\\nStatus: ✅ Active\"",
+    "STEP 3 - Rewrite fmt_balance_screen to simple style: Remove _card() call. Use f\"💰 <b>My Balance</b>\\n{_SEP}\\n👤 <b>{name}</b>\\n🆔 ID: <code>{id}</code>\\n...\\n{_SEP}\\nStatus: ...\" pattern.",
+    "STEP 4 - Rewrite fmt_product_list_header: Replace _card() with simple f\"{category_name}\\n{_SEP}\\n📦 <b>{count}</b> product(s) available\\nSelect a product below:\"",
+    "STEP 5 - Rewrite fmt_product_detail: Replace _card() with simple title + _SEP + body pattern.",
+    "STEP 6 - Rewrite fmt_service_detail: Replace _card() with simple title + _SEP + body pattern.",
+    "STEP 7 - Rewrite fmt_order_history: Replace _card() with simple '<b>📜 Order History</b>\\n{_SEP}\\n' + lines pattern. Handle empty case with simple message.",
+    "STEP 8 - Rewrite fmt_deposit_history: Replace _card() with simple '<b>💳 Deposit History</b>\\n{_SEP}\\n' + lines pattern.",
+    "STEP 9 - Rewrite fmt_admin_dashboard: Replace _card() with simple '<b>📊 Admin Dashboard</b>\\n{_SEP}\\n' + body pattern.",
+    "STEP 10 - Rewrite fmt_analytics: Replace _card() with simple '<b>📈 Sales Analytics</b>\\n{_SEP}\\n' + body pattern.",
+    "STEP 11 - Fix the two inline _card() calls in admin dashboard handler (line 5816 for low stock alert and line 5849 for stock overview): Replace with simple f-string format using _SEP.",
+    "STEP 12 - Add AI Support feature: Add a new button BTN_AI_SUPPORT = _b('🤖 AI Support') in the user button definitions (around line 660). Add it to main_menu_kb() alongside BTN_SUPPORT. Add a new FSM state for AI support in UserFlow class. Create a handler that shows a menu of FAQ topics as a reply keyboard: 'How to Buy', 'How to Deposit', 'Check Stock', 'Referral Info', 'My Orders', '2FA Help', 'Mail Codes', 'Ask a Question'. Each topic button shows a pre-written answer. The 'Ask a Question' option lets user type freely, and simple keyword matching provides answers.",
+    "STEP 13 - Code audit and fixes: Check for any broken references, dead handler states, buttons not wired to handlers. Specifically verify _quick_actions_inline is used properly (only in admin dashboard which is fine). Remove _CARD_W constant. Ensure all fmt_* functions are consistent with simple style."
+  ],
+  "acceptance_criteria": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\" passes with no errors",
+    "No box-drawing characters (╔═╗║╚╝╠╣) remain in any fmt_* function",
+    "_card() function is completely removed",
+    "All fmt_* functions use _SEP-based simple formatting with <b>title</b> pattern",
+    "AI Support button exists in main_menu_kb()",
+    "AI Support handler responds to FAQ topics with pre-written answers",
+    "Keyword matching in 'Ask a Question' handles common queries about buy, deposit, stock, referral, vip",
+    "No syntax errors in the final file"
+  ],
+  "verification": [
+    "cd /projects/sandbox/Mail-Shop && python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+    "grep -c '╔\\|╗\\|║\\|╚\\|╝\\|╠\\|╣' bot.py should return 0 (no box-drawing in code logic, only maybe in the file header comment which is fine to keep or remove)",
+    "grep -c 'def _card' bot.py should return 0",
+    "grep -c 'BTN_AI_SUPPORT' bot.py should return at least 3 (definition, menu, handler)",
+    "grep -c 'AI Support' bot.py should return at least 1"
+  ],
+  "blocked_reason": null,
+  "findings": "All _card() usages removed and replaced with clean _SEP-based formatting. _responsive_kb removed as unused. AI Support fully implemented with FAQ topics and keyword matching. Box-drawing characters only remain in file header comments (cosmetic, not in any fmt_ function). All acceptance criteria verified passing. Post-review fixes applied: (1) keyword matching now uses re.search with word boundaries to prevent substring false positives, (2) ai_free_question no-match path stays in ai_support_ask state for consistent UX, (3) main menu pairs BTN_SUPPORT and BTN_AI_SUPPORT on same row with BTN_MORE alone."
+}

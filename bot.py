@@ -657,7 +657,18 @@ BTN_GC_FILTER   = _b("🎯 Filter Mail")
 BTN_GC_CHANGE   = _b("✏️ Change Mail")
 BTN_HISTORY  = _b("📋 Order History")
 BTN_SUPPORT  = _b("🆘 Support")
+BTN_AI_SUPPORT = _b("🤖 AI Support")
 BTN_REFERRAL = _b("🔗 Referral")
+
+# ── AI Support FAQ Topics ──────────────────────────────────────────
+BTN_AI_HOW_BUY     = _b("❓ How to Buy")
+BTN_AI_HOW_DEPOSIT = _b("💳 How to Deposit")
+BTN_AI_STOCK       = _b("📦 Check Stock")
+BTN_AI_REFERRAL    = _b("🔗 Referral Info")
+BTN_AI_ORDERS      = _b("📋 My Orders")
+BTN_AI_2FA         = _b("🔐 2FA Help")
+BTN_AI_MAIL        = _b("📨 Mail Codes")
+BTN_AI_ASK         = _b("💬 Ask a Question")
 BTN_CONFIRM  = _b("✅ Confirm Purchase")
 BTN_COUPON   = _b("🎫 Apply Coupon")
 
@@ -666,6 +677,7 @@ BTN_TRENDING    = _b("🔥 Trending")
 BTN_FAVORITES   = _b("⭐ Favorites")
 BTN_MY_STATS    = _b("📊 My Stats")
 BTN_SEARCH      = _b("🔍 Search")
+BTN_MORE        = _b("📂 More")
 
 # ── Duration ───────────────────────────────────────────────────────
 BTN_1DAY   = _b("⏱ 1 Day")
@@ -695,6 +707,11 @@ BTN_ADM_PROXY_PKGS    = _b("📡 Data Packages")
 BTN_ADM_ORDER_LOOKUP  = _b("🔍 Order Lookup")
 BTN_ADM_ANALYTICS     = _b("📈 Analytics")
 BTN_PKG_ADD           = _b("➕ Add Package")
+
+# ── Admin sub-menu buttons ─────────────────────────────────────────
+BTN_ADM_ORDERS_MENU   = _b("📋 Orders")
+BTN_ADM_REPORTS_MENU  = _b("📊 Reports")
+BTN_ADM_TOOLS_MENU    = _b("🔧 Tools")
 
 # ── Admin panel enhancements (FEAT-002) ────────────────────────────
 BTN_ADM_LOW_STOCK     = _b("🚨 Low Stock Alerts")
@@ -877,7 +894,8 @@ async def use_bonus(uid: int, amount: float) -> float:
 def compute_bonus_usage(bonus: dict, pid: str, total: float) -> tuple:
     """Return (bonus_used, remaining_cost) for a purchase."""
     bonus_used = 0.0
-    if pid in bonus.get("allowed_products", []) and bonus.get("amount", 0) > 0:
+    allowed = bonus.get("allowed_products", [])
+    if ("*" in allowed or pid in allowed) and bonus.get("amount", 0) > 0:
         if bonus["amount"] >= total:
             bonus_used = total
         else:
@@ -929,18 +947,12 @@ async def add_referral_earning(referrer_uid: int, amount: float, from_uid: int, 
     await db_update(f"users/{referrer_uid}/referral", {"total_earned": new_total})
 
 
+
 async def pay_referral_commission(bot: Bot, buyer_uid: int, purchase_amount: float, order_id: str) -> None:
-    """Pay referral commission to the buyer's referrer from shop revenue.
+    """Credit referral bonus to the referrer after purchase.
 
-    How it works:
-    - The buyer pays the FULL product price (no discount for them).
-    - The referrer receives a commission (percentage of purchase_amount).
-    - This commission comes FROM the shop's revenue, not as extra money.
-    - Effective shop revenue = purchase_amount - commission.
-    - The shop owner never loses money beyond this agreed margin.
-
-    A 'referral_costs' log entry is stored so the owner can track
-    how much revenue was shared with referrers.
+    The referrer earns a Bonus Balance (not real money) that can only
+    be used as a discount on future purchases.
     """
     try:
         ref_info = await get_referral_info(buyer_uid)
@@ -950,26 +962,21 @@ async def pay_referral_commission(bot: Bot, buyer_uid: int, purchase_amount: flo
             bonus_pct = settings.get("referral_bonus_pct", 5.0)
             commission = round(purchase_amount * bonus_pct / 100, 4)
             if commission > 0:
-                # Credit referrer - this amount is deducted from shop revenue (not extra)
-                await update_balance(referrer_uid, commission)
+                # Credit referrer's BONUS balance (not real money)
+                current_bonus = await get_bonus(referrer_uid)
+                new_amount = round(current_bonus["amount"] + commission, 4)
+                existing_allowed = current_bonus.get("allowed_products", [])
+                if "*" not in existing_allowed:
+                    existing_allowed = existing_allowed + ["*"]
+                await set_bonus(referrer_uid, new_amount, existing_allowed)
                 await add_referral_earning(referrer_uid, commission, buyer_uid, order_id)
-                # Log this as a revenue cost so the owner can audit
-                await db_push("referral_costs", {
-                    "order_id": order_id,
-                    "buyer_uid": buyer_uid,
-                    "referrer_uid": referrer_uid,
-                    "purchase_amount": purchase_amount,
-                    "commission": commission,
-                    "effective_revenue": round(purchase_amount - commission, 4),
-                    "ts": int(time.time()),
-                })
                 try:
                     await bot.send_message(
                         referrer_uid,
-                        f"\U0001f3af <b>Referral Bonus!</b>\n{'━' * 22}\n"
+                        f"\U0001f3af <b>Referral Bonus!</b>\n{_SEP}\n"
                         f"Your referral made a purchase.\n"
-                        f"\U0001f4b0 Commission: <b>${commission:.2f}</b> credited to your balance.\n"
-                        f"<i>(From shop revenue share)</i>",
+                        f"\U0001f381 Bonus: <b>${commission:.2f}</b> added to your Bonus Balance.\n"
+                        f"Use it as a discount on your next purchase!",
                     )
                 except Exception:
                     pass
@@ -1850,25 +1857,8 @@ _SEP  = "━" * 22
 _LINE = "─" * 22
 
 # ══════════════════════════════════════════════════════════════════
-# UI HELPERS — Dark Theme Card System
+# UI HELPERS
 # ══════════════════════════════════════════════════════════════════
-
-_CARD_W = 24
-
-def _card(title: str, body: str, footer: str = None) -> str:
-    """Dark-theme card using Unicode box-drawing characters."""
-    top = f"\u2554{'═' * _CARD_W}\u2557"
-    mid = f"\u2560{'═' * _CARD_W}\u2563"
-    bot = f"\u255A{'═' * _CARD_W}\u255D"
-    lines = [top, f"\u2551 <b>{title}</b>", mid]
-    for line in body.split("\n"):
-        lines.append(f"\u2551 {line}")
-    if footer:
-        lines.append(mid)
-        for fl in footer.split("\n"):
-            lines.append(f"\u2551 {fl}")
-    lines.append(bot)
-    return "\n".join(lines)
 
 
 def _progress_bar(current: float, maximum: float, width: int = 10) -> str:
@@ -1900,30 +1890,6 @@ def _status_dot(is_online: bool) -> str:
     return "\U0001F7E2" if is_online else "\U0001F534"
 
 
-def _inline_row(*buttons: tuple) -> List[InlineKeyboardButton]:
-    """Build a row of InlineKeyboardButtons from (text, callback_data) tuples."""
-    return [InlineKeyboardButton(text=t, callback_data=d) for t, d in buttons]
-
-
-def _paginate_inline(items: list, page: int, per_page: int, prefix: str) -> InlineKeyboardMarkup:
-    """Create paginated inline keyboard from items list.
-    Each item should be (display_text, callback_data).
-    """
-    start = page * per_page
-    end = start + per_page
-    page_items = items[start:end]
-    rows = [[InlineKeyboardButton(text=txt, callback_data=cb)] for txt, cb in page_items]
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="\u25C0 Prev", callback_data=f"{prefix}:page:{page - 1}"))
-    total_pages = (len(items) + per_page - 1) // per_page
-    if page < total_pages - 1:
-        nav.append(InlineKeyboardButton(text="Next \u25B6", callback_data=f"{prefix}:page:{page + 1}"))
-    if nav:
-        rows.append(nav)
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 def _quick_actions_inline(actions: list) -> InlineKeyboardMarkup:
     """Generate quick-action button rows from list of (text, callback_data) tuples."""
     rows = []
@@ -1936,35 +1902,13 @@ def _quick_actions_inline(actions: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _responsive_kb(*items: str, max_cols: int = 2, nav: bool = True) -> ReplyKeyboardMarkup:
-    """Auto-adjust reply keyboard rows: 2-col for short texts, 1-col for long."""
-    rows = []
-    row = []
-    for item in items:
-        if len(item) > 18:
-            if row:
-                rows.append(row)
-                row = []
-            rows.append([item])
-        else:
-            row.append(item)
-            if len(row) >= max_cols:
-                rows.append(row)
-                row = []
-    if row:
-        rows.append(row)
-    if nav:
-        rows.append([BACK_BTN, HOME_BTN])
-    return _kb(*rows)
-
-
 def _dt(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=TZ).strftime("%d %b %Y, %H:%M UTC")
 
 
 def fmt_welcome(shop_name: str, welcome: str, first_name: str, balance: float,
                 user: dict = None) -> str:
-    """Dark-theme styled welcome message with VIP badge and quick stats."""
+    """Clean welcome message with VIP badge and quick stats."""
     tier_name, tier_emoji = ("", "")
     total_spent = 0
     order_count = 0
@@ -1973,14 +1917,15 @@ def fmt_welcome(shop_name: str, welcome: str, first_name: str, balance: float,
         order_count = user.get("order_count", 0)
         tier_name, tier_emoji = get_vip_tier(total_spent)
     vip_badge = f" {tier_emoji} {tier_name}" if tier_name else ""
-    body = (
-        f"{welcome}\n"
-        f"\n"
+    return (
+        f"<b>{shop_name}</b>\n{_SEP}\n"
+        f"{welcome}\n\n"
         f"\U0001F464 <b>{first_name}</b>{vip_badge}\n"
         f"\U0001F4B0 Balance: <code>${balance:.2f}</code>\n"
-        f"\U0001F6D2 Orders: <b>{order_count}</b>  |  \U0001F4C8 Spent: <b>${total_spent:.2f}</b>"
+        f"\U0001F6D2 Orders: <b>{order_count}</b>  |  \U0001F4C8 Spent: <b>${total_spent:.2f}</b>\n"
+        f"{_SEP}\n"
+        f"Status: \u2705 Active"
     )
-    return _card(f"{shop_name}", body)
 
 def fmt_balance_screen(user: dict) -> str:
     banned = "\U0001F6AB Banned" if user.get("is_banned") else "\u2705 Active"
@@ -1994,7 +1939,8 @@ def fmt_balance_screen(user: dict) -> str:
     vip_line = f"{tier_emoji} VIP: <b>{tier_name}</b>\n" if tier_name else ""
     progress = _progress_bar(current, threshold) if next_tier != "Max" else _progress_bar(1, 1)
     member_since = _dt(user.get("joined_at", int(time.time())))
-    body = (
+    return (
+        f"\U0001F4B0 <b>My Balance</b>\n{_SEP}\n"
         f"\U0001F464 <b>{user.get('full_name', 'User')}</b>\n"
         f"\U0001F194 <code>{user.get('user_id', '?')}</code>  @{user.get('username') or 'N/A'}\n"
         f"{vip_line}"
@@ -2010,18 +1956,21 @@ def fmt_balance_screen(user: dict) -> str:
         f"\U0001F4C5 Member: {member_since}\n"
         f"\U0001F7E2 Status: {banned}"
     )
-    return _card("\U0001F4B0 My Balance", body)
 
 def fmt_product_list_header(category_name: str, count: int) -> str:
-    body = f"\U0001F4E6 <b>{count}</b> product(s) available\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nSelect a product below:"
-    return _card(category_name, body)
+    return (
+        f"<b>{category_name}</b>\n{_SEP}\n"
+        f"\U0001F4E6 <b>{count}</b> product(s) available\n"
+        f"Select a product below:"
+    )
 
 def fmt_product_detail(product: dict, stock: int) -> str:
     desc = product.get("description", "").strip()
     desc_line = f"\U0001F4DD {desc}\n" if desc else ""
     status = _status_dot(stock > 0)
     stock_bar = _progress_bar(stock, max(stock, 50), width=8)
-    body = (
+    return (
+        f"{product.get('emoji', chr(0x1F4E6))} <b>{product['name']}</b>\n{_SEP}\n"
         f"{desc_line}"
         f"{status} Status: {'In Stock' if stock > 0 else 'Out of Stock'}\n"
         f"\U0001F4B5 Price: <code>${product['price']:.2f}</code> /account\n"
@@ -2029,13 +1978,13 @@ def fmt_product_detail(product: dict, stock: int) -> str:
         f"{_LINE}\n"
         f"Enter the quantity you want to purchase:"
     )
-    return _card(f"{product.get('emoji', chr(0x1F4E6))} {product['name']}", body)
 
 def fmt_service_detail(product: dict, duration_days: int) -> str:
     price = round(product["price"] * duration_days, 4)
     desc = product.get("description", "").strip()
     desc_line = f"\U0001F4DD {desc}\n" if desc else ""
-    body = (
+    return (
+        f"{product.get('emoji', chr(0x1F310))} <b>{product['name']}</b>\n{_SEP}\n"
         f"{desc_line}"
         f"\U0001F4B5 Price/day: <code>${product['price']:.2f}</code>\n"
         f"\u23F1 Duration: <b>{duration_days} day(s)</b>\n"
@@ -2043,7 +1992,6 @@ def fmt_service_detail(product: dict, duration_days: int) -> str:
         f"{_LINE}\n"
         f"Press \u2705 Confirm Purchase to place your order."
     )
-    return _card(f"{product.get('emoji', chr(0x1F310))} {product['name']}", body)
 
 def fmt_order_summary(product: dict, qty: int, total: float,
                       balance: float, discount_pct: float = 0) -> str:
@@ -2136,8 +2084,11 @@ def fmt_deposit_submitted(dep_id: str, method: str, amount_bdt: float, amount_us
 
 def fmt_order_history(orders: list, vpn: list, proxy: list) -> str:
     if not orders and not vpn and not proxy:
-        body = "You haven't placed any orders.\nBrowse our products to get started!"
-        return _card("\U0001F4ED No Orders Yet", body)
+        return (
+            f"\U0001F4ED <b>No Orders Yet</b>\n{_SEP}\n"
+            f"You haven't placed any orders.\n"
+            f"Browse our products to get started!"
+        )
     lines = []
     if orders:
         lines.append("\U0001F4EE <b>Mail Orders</b>")
@@ -2157,17 +2108,23 @@ def fmt_order_history(orders: list, vpn: list, proxy: list) -> str:
             data_lbl = o.get("duration_days", "-")
             lines.append(f"  <code>{o['order_id']}</code>  {o['product_name']} {data_lbl}  ${o['price']:.2f}  {s}")
     total_orders = len(orders) + len(vpn) + len(proxy)
-    footer = f"\U0001F4CB Total: {total_orders} order(s)"
-    return _card("\U0001F4DC Order History", "\n".join(lines), footer)
+    return (
+        f"\U0001F4DC <b>Order History</b>\n{_SEP}\n"
+        + "\n".join(lines)
+        + f"\n{_SEP}\n\U0001F4CB Total: {total_orders} order(s)"
+    )
 
 def fmt_deposit_history(deposits: list) -> str:
     if not deposits:
-        return _card("\U0001F4B3 No Deposits Yet", "Make your first deposit to start shopping!")
+        return (
+            f"\U0001F4B3 <b>No Deposits Yet</b>\n{_SEP}\n"
+            f"Make your first deposit to start shopping!"
+        )
     lines = []
     for d in deposits[:12]:
         s = {"approved": "\u2705", "rejected": "\u274C"}.get(d["status"], "\u23F3")
         lines.append(f"{s} <code>{d['deposit_id'][:8]}</code>  {d['method']}  {d['amount_bdt']:.0f}BDT  ${d['amount_usd']:.2f}")
-    return _card("\U0001F4B3 Deposit History", "\n".join(lines))
+    return f"\U0001F4B3 <b>Deposit History</b>\n{_SEP}\n" + "\n".join(lines)
 
 def fmt_admin_dashboard(stats: dict) -> str:
     pending_dep = stats.get('pending_deposits', 0)
@@ -2175,7 +2132,8 @@ def fmt_admin_dashboard(stats: dict) -> str:
     alert = ""
     if pending_dep > 0 or pending_ord > 0:
         alert = f"\n\U0001F6A8 <b>ALERTS:</b> {pending_dep} deposits, {pending_ord} orders pending"
-    body = (
+    return (
+        f"\U0001F4CA <b>Admin Dashboard</b>\n{_SEP}\n"
         f"\U0001F465 Users: <b>{stats['total_users']}</b>\n"
         f"\U0001F4B5 Revenue: <code>${stats['total_revenue']:.2f}</code>\n"
         f"\U0001F6D2 Sales: <b>{stats['total_sales']}</b>\n"
@@ -2184,11 +2142,9 @@ def fmt_admin_dashboard(stats: dict) -> str:
         f"\U0001F4E6 Pending Orders: <b>{pending_ord}</b>"
         f"{alert}"
     )
-    return _card("\U0001F4CA Admin Dashboard", body)
 
 
 def fmt_analytics(data: dict) -> str:
-    # Build sparkline from daily revenue hints if available
     body_lines = [
         f"<b>Today</b>",
         f"  \U0001F4B5 Revenue: <code>${data['today_rev']:.2f}</code>",
@@ -2216,7 +2172,7 @@ def fmt_analytics(data: dict) -> str:
     else:
         top_buyers_lines.append("  No buyer data.")
     body = "\n".join(body_lines + top_products_lines + top_buyers_lines)
-    return _card("\U0001F4C8 Sales Analytics", body)
+    return f"\U0001F4C8 <b>Sales Analytics</b>\n{_SEP}\n{body}"
 
 
 def fmt_admin_deposit_review(d: dict) -> str:
@@ -2441,7 +2397,10 @@ class UserFlow(StatesGroup):
     search_services      = State()
     order_tracking       = State()
     user_stats           = State()
-    repeat_order_confirm = State()
+    more_menu            = State()
+    # AI Support flow
+    ai_support           = State()
+    ai_support_ask       = State()
 
 class AdminFlow(StatesGroup):
     menu              = State()
@@ -2499,6 +2458,10 @@ class AdminFlow(StatesGroup):
     profit_calc       = State()
     profit_set_cost   = State()
     activity_logs     = State()
+    # Sub-menu states
+    orders_submenu    = State()
+    reports_submenu   = State()
+    tools_submenu     = State()
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2518,14 +2481,29 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         [BTN_GET_MAIL,  BTN_TEMP_MAIL],
         [BTN_BUY_VPN,   BTN_BUY_PROXY],
         [BTN_GET_CODE,  BTN_GET_2FA],
-        [BTN_TRENDING,  BTN_FAVORITES],
-        [BTN_SEARCH,    BTN_MY_STATS],
-        [BTN_HISTORY,   BTN_SUPPORT],
-        [BTN_REFERRAL],
+        [BTN_HISTORY,   BTN_REFERRAL],
+        [BTN_MORE],
+        [BTN_SUPPORT,   BTN_AI_SUPPORT],
     )
 
 def banned_user_kb() -> ReplyKeyboardMarkup:
     return _kb([BTN_SUPPORT])
+
+def more_menu_kb() -> ReplyKeyboardMarkup:
+    return _kb(
+        [BTN_TRENDING,  BTN_FAVORITES],
+        [BTN_SEARCH,    BTN_MY_STATS],
+        [BACK_BTN, HOME_BTN],
+    )
+
+def ai_support_kb() -> ReplyKeyboardMarkup:
+    return _kb(
+        [BTN_AI_HOW_BUY,     BTN_AI_HOW_DEPOSIT],
+        [BTN_AI_STOCK,       BTN_AI_REFERRAL],
+        [BTN_AI_ORDERS,      BTN_AI_2FA],
+        [BTN_AI_MAIL,        BTN_AI_ASK],
+        [BACK_BTN, HOME_BTN],
+    )
 
 def _nav_row() -> List[str]:
     return [BACK_BTN, HOME_BTN]
@@ -2646,16 +2624,32 @@ def admin_main_kb() -> ReplyKeyboardMarkup:
         [BTN_ADM_DASHBOARD],
         [BTN_ADM_PRODUCTS,     BTN_ADM_STOCK],
         [BTN_ADM_USERS,        BTN_ADM_DEPOSITS],
-        [BTN_ADM_VPN_ORDERS,   BTN_ADM_PROXY_ORDERS],
-        [BTN_ADM_COUPONS,      BTN_ADM_BROADCAST],
-        [BTN_ADM_PROXY_PKGS,   BTN_ADM_EXPORT],
-        [BTN_ADM_ANALYTICS,    BTN_ADM_ORDER_LOOKUP],
-        [BTN_ADM_LOW_STOCK,    BTN_ADM_STATUS_MGR],
-        [BTN_ADM_ROLES,        BTN_ADM_LOGS],
-        [BTN_ADM_EXPORT_TX,    BTN_ADM_PROFIT],
-        [BTN_ADM_PRICE_SYNC,   BTN_ADM_AUTO_IMPORT],
-        [BTN_ADM_SETTINGS],
+        [BTN_ADM_ORDERS_MENU,  BTN_ADM_REPORTS_MENU],
+        [BTN_ADM_TOOLS_MENU,   BTN_ADM_SETTINGS],
         [HOME_BTN],
+    )
+
+def admin_orders_submenu_kb() -> ReplyKeyboardMarkup:
+    return _kb(
+        [BTN_ADM_VPN_ORDERS,   BTN_ADM_PROXY_ORDERS],
+        [BTN_ADM_ORDER_LOOKUP, BTN_ADM_EXPORT],
+        [BACK_BTN, HOME_BTN],
+    )
+
+def admin_reports_submenu_kb() -> ReplyKeyboardMarkup:
+    return _kb(
+        [BTN_ADM_ANALYTICS,    BTN_ADM_PROFIT],
+        [BTN_ADM_EXPORT_TX,    BTN_ADM_LOGS],
+        [BACK_BTN, HOME_BTN],
+    )
+
+def admin_tools_submenu_kb() -> ReplyKeyboardMarkup:
+    return _kb(
+        [BTN_ADM_LOW_STOCK,    BTN_ADM_STATUS_MGR],
+        [BTN_ADM_PRICE_SYNC,   BTN_ADM_AUTO_IMPORT],
+        [BTN_ADM_ROLES,        BTN_ADM_BROADCAST],
+        [BTN_ADM_COUPONS,      BTN_ADM_PROXY_PKGS],
+        [BACK_BTN, HOME_BTN],
     )
 
 def proxy_pkg_manage_kb(options: list) -> ReplyKeyboardMarkup:
@@ -2687,8 +2681,39 @@ SETTINGS_MAP = {
     _b("💾 Backup Interval"): ("backup_interval_hours", float, "Enter backup interval in hours (e.g. 24 for daily, 0 to disable):"),
 }
 
+# ── Settings Sub-Category Buttons ──
+BTN_SET_PAYMENT  = _b("💳 Payment")
+BTN_SET_CHANNELS = _b("📣 Channels")
+BTN_SET_SHOP     = _b("🏪 Shop")
+BTN_SET_SYSTEM   = _b("🔧 System")
+
+SETTINGS_CATEGORIES = {
+    BTN_SET_PAYMENT: [
+        _b("💱 USD Rate"), _b("📱 bKash Number"), _b("📱 bKash Min Deposit"),
+        _b("📱 Nagad Number"), _b("📱 Nagad Min Deposit"),
+        _b("🔶 Binance UID"), _b("🔶 Binance Min Deposit"),
+    ],
+    BTN_SET_CHANNELS: [
+        _b("📣 Force Join #1"), _b("📣 Force Join #2"), _b("🆘 Support Link"),
+    ],
+    BTN_SET_SHOP: [
+        _b("🏪 Shop Name"), _b("💬 Welcome Message"), _b("🔑 Get 2FA Link"),
+        _b("🎯 Referral Bonus %"), _b("📡 Proxy Data Options"),
+    ],
+    BTN_SET_SYSTEM: [
+        _b("⚠️ Low Stock Alert"), _b("⏱ Stock Export Interval"),
+        _b("🔧 Maintenance Mode"), _b("🔧 Maintenance Msg"), _b("💾 Backup Interval"),
+    ],
+}
+
 def admin_settings_kb() -> ReplyKeyboardMarkup:
-    keys = list(SETTINGS_MAP.keys())
+    return _kb(
+        [BTN_SET_PAYMENT, BTN_SET_CHANNELS],
+        [BTN_SET_SHOP, BTN_SET_SYSTEM],
+        [BACK_BTN, HOME_BTN],
+    )
+
+def settings_category_kb(keys: list) -> ReplyKeyboardMarkup:
     rows = [keys[i:i+2] for i in range(0, len(keys), 2)]
     rows.append([BACK_BTN, HOME_BTN])
     return _kb(*rows)
@@ -3022,19 +3047,7 @@ async def send_main_menu(message: Message, state: FSMContext, text: Optional[str
     balance   = user.get("balance", 0)
     first_name = user.get("first_name", message.from_user.first_name)
     display = text or fmt_welcome(shop_name, welcome, first_name, balance, user)
-    # Quick access inline shortcuts
-    quick_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="\U0001F4E8 Buy Mail", callback_data="nav_mail"),
-            InlineKeyboardButton(text="\U0001F4B0 Balance", callback_data="nav_balance"),
-        ],
-        [
-            InlineKeyboardButton(text="\U0001F4CB History", callback_data="nav_history"),
-            InlineKeyboardButton(text="\U0001F3E0 Home", callback_data="nav_home"),
-        ],
-    ])
     await message.answer(display, reply_markup=main_menu_kb())
-    await message.answer("\u26A1 <b>Quick Navigation</b>", reply_markup=quick_kb)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3052,155 +3065,6 @@ async def go_home(message: Message, state: FSMContext):
         await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
         return
     await send_main_menu(message, state)
-
-
-# ── Inline Navigation Callbacks ────────────────────────────────────
-
-@router_global.callback_query(F.data == "nav_home")
-async def nav_home_cb(callback: CallbackQuery, state: FSMContext):
-    await send_main_menu(callback.message, state, user_id=callback.from_user.id)
-    await callback.answer()
-
-
-@router_global.callback_query(F.data == "nav_balance")
-async def nav_balance_cb(callback: CallbackQuery, state: FSMContext):
-    user = await get_user(callback.from_user.id) or {}
-    await callback.message.answer(fmt_balance_screen(user), reply_markup=main_menu_kb())
-    await callback.answer()
-
-
-@router_global.callback_query(F.data == "nav_mail")
-async def nav_mail_cb(callback: CallbackQuery, state: FSMContext):
-    products = await get_all_products()
-    _mail_emoji = "\U0001F4EE"
-    dm = {
-        f"{_status_dot(p.get('status','online')=='online')} {p.get('emoji', _mail_emoji)} {p['name']}  \u00B7  ${p['price']:.2f}  \u00B7  {p.get('stock_count',0)} left": pid
-        for pid, p in products.items()
-        if p.get("category", "mail") == "mail" and not p.get("hidden")
-    }
-    if not dm:
-        await callback.answer("No mail products available.", show_alert=True)
-        return
-    await state.update_data(dm=dm)
-    await state.set_state(UserFlow.mail_product)
-    await callback.message.answer(
-        fmt_product_list_header("\U0001F4EE Mail Products", len(dm)),
-        reply_markup=products_kb(dm),
-    )
-    await callback.answer()
-
-
-@router_global.callback_query(F.data == "nav_history")
-async def nav_history_cb(callback: CallbackQuery, state: FSMContext):
-    uid = callback.from_user.id
-    mail_o, vpn_o, proxy_o = await asyncio.gather(
-        get_user_orders(uid), get_user_vpn_orders(uid), get_user_proxy_orders(uid),
-    )
-    await callback.message.answer(fmt_order_history(mail_o, vpn_o, proxy_o), reply_markup=main_menu_kb())
-    # Paginated order inline
-    all_orders = []
-    for o in (mail_o or [])[:5]:
-        all_orders.append((
-            f"\U0001F4EE {o['product_name']} x{o['qty']} - ${o['total_price']:.2f}",
-            f"order_detail:mail:{o['order_id']}",
-        ))
-    for o in (vpn_o or [])[:3]:
-        all_orders.append((
-            f"\U0001F310 {o['product_name']} {o['duration_days']}d - ${o['price']:.2f}",
-            f"order_detail:vpn:{o['order_id']}",
-        ))
-    for o in (proxy_o or [])[:3]:
-        all_orders.append((
-            f"\U0001F510 {o['product_name']} - ${o['price']:.2f}",
-            f"order_detail:proxy:{o['order_id']}",
-        ))
-    if all_orders:
-        paginated_kb = _paginate_inline(all_orders, 0, 5, "orders")
-        await callback.message.answer("\U0001F4C4 <b>Tap to expand details:</b>", reply_markup=paginated_kb)
-    await callback.answer()
-
-
-@router_global.callback_query(F.data == "nav_admin")
-async def nav_admin_cb(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("\U0001F6AB Access denied", show_alert=True)
-        return
-    await state.set_state(AdminFlow.menu)
-    await callback.message.answer("\U0001F510 <b>Admin Panel</b>", reply_markup=admin_main_kb())
-    await callback.answer()
-
-
-@router_global.callback_query(F.data == "nav_deposit")
-async def nav_deposit_cb(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(UserFlow.dep_method)
-    await callback.message.answer(
-        "\U0001F4B3 <b>Deposit</b>\nSelect a deposit method from the menu.",
-        reply_markup=deposit_method_kb(),
-    )
-    await callback.answer()
-
-
-@router_global.callback_query(F.data.startswith("orders:page:"))
-async def nav_orders_page_cb(callback: CallbackQuery, state: FSMContext):
-    page = int(callback.data.split(":")[-1])
-    uid = callback.from_user.id
-    mail_o, vpn_o, proxy_o = await asyncio.gather(
-        get_user_orders(uid), get_user_vpn_orders(uid), get_user_proxy_orders(uid),
-    )
-    all_orders = []
-    for o in (mail_o or [])[:10]:
-        all_orders.append((
-            f"\U0001F4EE {o['product_name']} x{o['qty']} - ${o['total_price']:.2f}",
-            f"order_detail:mail:{o['order_id']}",
-        ))
-    for o in (vpn_o or [])[:5]:
-        all_orders.append((
-            f"\U0001F310 {o['product_name']} {o['duration_days']}d - ${o['price']:.2f}",
-            f"order_detail:vpn:{o['order_id']}",
-        ))
-    for o in (proxy_o or [])[:5]:
-        all_orders.append((
-            f"\U0001F510 {o['product_name']} - ${o['price']:.2f}",
-            f"order_detail:proxy:{o['order_id']}",
-        ))
-    if all_orders:
-        paginated_kb = _paginate_inline(all_orders, page, 5, "orders")
-        try:
-            await callback.message.edit_reply_markup(reply_markup=paginated_kb)
-        except Exception:
-            pass
-    await callback.answer()
-
-
-@router_global.callback_query(F.data.startswith("order_detail:"))
-async def nav_order_detail_cb(callback: CallbackQuery):
-    parts = callback.data.split(":", 2)
-    if len(parts) < 3:
-        await callback.answer("Invalid order", show_alert=True)
-        return
-    otype, oid = parts[1], parts[2]
-    uid = callback.from_user.id
-    detail_text = f"\U0001F4CB <b>Order Details</b>\n{_LINE}\nOrder: <code>{oid}</code>\nType: {otype.upper()}"
-    repeat_btn = []
-    if otype == "mail":
-        orders = await get_user_orders(uid)
-        for o in orders:
-            if o.get("order_id") == oid:
-                detail_text = (
-                    f"\U0001F4CB <b>Order Details</b>\n{_LINE}\n"
-                    f"ID: <code>{o['order_id']}</code>\n"
-                    f"Product: {o['product_name']}\n"
-                    f"Qty: {o['qty']} | Total: ${o['total_price']:.2f}\n"
-                    f"Date: {_dt(o.get('created_at', int(time.time())))}"
-                )
-                repeat_btn = [[InlineKeyboardButton(
-                    text="\U0001F501 Repeat Order",
-                    callback_data=f"repeat_order:mail:{oid}",
-                )]]
-                break
-    detail_kb = InlineKeyboardMarkup(inline_keyboard=repeat_btn) if repeat_btn else None
-    await callback.message.answer(detail_text, reply_markup=detail_kb)
-    await callback.answer()
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3415,16 +3279,6 @@ async def cmd_start(message: Message, state: FSMContext):
 async def show_balance(message: Message):
     user = await get_user(message.from_user.id) or {}
     await message.answer(fmt_balance_screen(user), reply_markup=main_menu_kb())
-    # Live statistics widget
-    total_spent = user.get("total_spent", 0)
-    order_count = user.get("order_count", 0)
-    stat_line = f"\U0001F4CA <i>Stats: {order_count} orders | ${total_spent:.2f} spent</i>"
-    balance_actions = _quick_actions_inline([
-        ("\U0001F4B3 Deposit", "nav_deposit"),
-        ("\U0001F6D2 Shop", "nav_mail"),
-        ("\U0001F4CB History", "nav_history"),
-    ])
-    await message.answer(stat_line, reply_markup=balance_actions)
 
 
 @router_start.message(F.text == BTN_REFERRAL)
@@ -3439,10 +3293,11 @@ async def show_referral(message: Message):
     link = f"https://t.me/{bot_username}?start=ref_{uid}"
     await message.answer(
         f"🔗 <b>Referral Program</b>\n{_SEP}\n"
-        f"Share your link and earn commission on every purchase your referrals make!\n\n"
+        f"Share your link and earn Bonus Balance on every purchase your referrals make!\n"
+        f"(Bonus can be used as discount on your purchases)\n\n"
         f"🔗 Your Link:\n<code>{link}</code>\n\n"
         f"👥 Total Referred: <b>{ref_info.get('referred_count', 0)}</b>\n"
-        f"💰 Total Earned: <b>${ref_info.get('total_earned', 0.0):.2f}</b>",
+        f"🎁 Bonus Earned: <b>${ref_info.get('total_earned', 0.0):.2f}</b>",
         reply_markup=main_menu_kb(),
     )
 
@@ -3848,6 +3703,207 @@ async def show_support(message: Message):
     )
 
 
+# ══════════════════════════════════════════════════════════════════
+# AI SUPPORT HANDLER
+# ══════════════════════════════════════════════════════════════════
+
+_AI_FAQ = {
+    BTN_AI_HOW_BUY: (
+        "\u2753 <b>How to Buy</b>\n" + _SEP + "\n"
+        "1. Choose a category from the main menu (Get Mail, Buy VPN, Buy Proxy)\n"
+        "2. Select the product you want\n"
+        "3. Enter the quantity\n"
+        "4. Optionally apply a coupon code\n"
+        "5. Press \u2705 Confirm Purchase\n"
+        "6. Your accounts will be delivered instantly!\n\n"
+        "Make sure you have enough balance before purchasing."
+    ),
+    BTN_AI_HOW_DEPOSIT: (
+        "\U0001F4B3 <b>How to Deposit</b>\n" + _SEP + "\n"
+        "1. Press \U0001F4B3 Deposit from the main menu\n"
+        "2. Choose a payment method (bKash, Nagad, or Binance)\n"
+        "3. Send the amount to the displayed number/UID\n"
+        "4. Enter the amount you sent\n"
+        "5. Provide your Transaction ID\n"
+        "6. Wait for admin approval (usually 5-30 minutes)\n\n"
+        "Your balance will be credited automatically once approved."
+    ),
+    BTN_AI_STOCK: (
+        "\U0001F4E6 <b>Check Stock</b>\n" + _SEP + "\n"
+        "To check available stock:\n"
+        "1. Go to \U0001F4E8 Get Mail, \U0001F6E1 Buy VPN, or \U0001F30D Buy Proxy\n"
+        "2. Select any product to see current stock count\n"
+        "3. Green dot = In Stock, Red dot = Out of Stock\n\n"
+        "Stock is updated in real-time. If a product is out of stock, "
+        "check back later or contact support."
+    ),
+    BTN_AI_REFERRAL: (
+        "\U0001F517 <b>Referral Info</b>\n" + _SEP + "\n"
+        "Share your referral link with friends!\n"
+        "1. Press \U0001F517 Referral from the main menu\n"
+        "2. Copy your unique referral link\n"
+        "3. Share it with friends\n"
+        "4. When they join and make purchases, you earn bonus balance!\n\n"
+        "The more friends you invite, the more you earn."
+    ),
+    BTN_AI_ORDERS: (
+        "\U0001F4CB <b>My Orders</b>\n" + _SEP + "\n"
+        "To view your order history:\n"
+        "1. Press \U0001F4CB Order History from the main menu\n"
+        "2. You'll see all your Mail, VPN, and Proxy orders\n"
+        "3. Each order shows the product, quantity, and price\n\n"
+        "For VPN/Proxy orders, status indicators:\n"
+        "\u2705 = Delivered  |  \u23F3 = Pending  |  \u274C = Cancelled"
+    ),
+    BTN_AI_2FA: (
+        "\U0001F510 <b>2FA Help</b>\n" + _SEP + "\n"
+        "Two-Factor Authentication (2FA) codes:\n"
+        "1. Press \U0001F510 Get 2FA from the main menu\n"
+        "2. Enter or paste your TOTP secret key\n"
+        "3. The bot generates a 6-digit code valid for 30 seconds\n\n"
+        "This works like Google Authenticator but directly in Telegram. "
+        "Keep your secret keys safe!"
+    ),
+    BTN_AI_MAIL: (
+        "\U0001F4E8 <b>Mail Codes</b>\n" + _SEP + "\n"
+        "To receive mail verification codes:\n"
+        "1. Press \U0001F4F2 Get Code from the main menu\n"
+        "2. Set your email address first (\U0001F4E7 Set Mail)\n"
+        "3. Use \U0001F4EC Get Codes to check for new codes\n"
+        "4. Use \U0001F4E5 Read Inbox to see all messages\n"
+        "5. Use \U0001F3AF Filter Mail to find specific emails\n\n"
+        "Your mailbox refreshes automatically. You can also use "
+        "\U0001F559 Temp Mail for disposable addresses."
+    ),
+}
+
+_AI_KEYWORDS = {
+    "buy": "buy", "purchase": "buy", "order": "buy", "how to buy": "buy",
+    "deposit": "deposit", "payment": "deposit", "bkash": "deposit",
+    "nagad": "deposit", "binance": "deposit", "pay": "deposit", "add money": "deposit",
+    "stock": "stock", "available": "stock", "out of stock": "stock",
+    "referral": "referral", "invite": "referral", "link": "referral", "refer": "referral",
+    "vip": "vip", "badge": "vip", "level": "vip", "tier": "vip",
+    "2fa": "2fa", "totp": "2fa", "authenticator": "2fa", "two factor": "2fa",
+    "mail": "mail", "code": "mail", "inbox": "mail", "email": "mail",
+    "vpn": "vpn", "proxy": "proxy",
+}
+
+_AI_KEYWORD_ANSWERS = {
+    "buy": (
+        "\U0001F6D2 <b>Buying Process</b>\n" + _SEP + "\n"
+        "Select a category (Get Mail, Buy VPN, Buy Proxy) from the main menu, "
+        "pick a product, enter quantity, and confirm. Make sure your balance is sufficient!"
+    ),
+    "deposit": (
+        "\U0001F4B3 <b>Deposit Info</b>\n" + _SEP + "\n"
+        "Press Deposit, choose bKash/Nagad/Binance, send money to the displayed number, "
+        "then enter the amount and transaction ID. Admin will approve within 5-30 minutes."
+    ),
+    "stock": (
+        "\U0001F4E6 <b>Stock Info</b>\n" + _SEP + "\n"
+        "Go to any product category and select a product to see real-time stock. "
+        "Green dot means available, red dot means out of stock."
+    ),
+    "referral": (
+        "\U0001F517 <b>Referral System</b>\n" + _SEP + "\n"
+        "Press Referral in the main menu to get your unique link. "
+        "Share it with friends - when they join and buy, you earn bonus balance!"
+    ),
+    "vip": (
+        "\U0001F451 <b>VIP System</b>\n" + _SEP + "\n"
+        "Your VIP tier is based on total spending. Higher tiers unlock badges "
+        "and exclusive benefits. Check your balance screen to see your progress!"
+    ),
+    "2fa": (
+        "\U0001F510 <b>2FA Codes</b>\n" + _SEP + "\n"
+        "Press Get 2FA, enter your TOTP secret key, and get a 6-digit code. "
+        "Works just like Google Authenticator!"
+    ),
+    "mail": (
+        "\U0001F4E8 <b>Mail System</b>\n" + _SEP + "\n"
+        "Use Get Code to set your email, then check codes and inbox. "
+        "Use Temp Mail for disposable email addresses."
+    ),
+    "vpn": (
+        "\U0001F6E1 <b>VPN Service</b>\n" + _SEP + "\n"
+        "Press Buy VPN, select a VPN product, choose duration (1/7/30/90 days), "
+        "and confirm your purchase. Delivery is handled by our team."
+    ),
+    "proxy": (
+        "\U0001F30D <b>Proxy Service</b>\n" + _SEP + "\n"
+        "Press Buy Proxy, select a proxy product, choose data package, "
+        "and confirm. Our team will deliver your proxy details."
+    ),
+}
+
+
+@router_start.message(F.text == BTN_AI_SUPPORT)
+async def show_ai_support(message: Message, state: FSMContext):
+    await state.set_state(UserFlow.ai_support)
+    await message.answer(
+        f"\U0001F916 <b>AI Support</b>\n{_SEP}\n"
+        f"Choose a topic below to get instant help,\n"
+        f"or press \U0001F4AC Ask a Question to type your query.",
+        reply_markup=ai_support_kb(),
+    )
+
+
+@router_start.message(UserFlow.ai_support, F.text.in_(_AI_FAQ.keys()))
+async def ai_faq_answer(message: Message, state: FSMContext):
+    answer = _AI_FAQ[message.text]
+    await message.answer(answer, reply_markup=ai_support_kb())
+
+
+@router_start.message(UserFlow.ai_support, F.text == BTN_AI_ASK)
+async def ai_ask_question(message: Message, state: FSMContext):
+    await state.set_state(UserFlow.ai_support_ask)
+    await message.answer(
+        f"\U0001F4AC <b>Ask a Question</b>\n{_SEP}\n"
+        f"Type your question below and I'll try to help!\n"
+        f"Examples: \"How do I buy?\", \"How to deposit?\", \"VIP info\"",
+        reply_markup=_kb([BACK_BTN, HOME_BTN]),
+    )
+
+
+@router_start.message(UserFlow.ai_support, F.text == BACK_BTN)
+async def ai_support_back(message: Message, state: FSMContext):
+    await send_main_menu(message, state)
+
+
+@router_start.message(UserFlow.ai_support_ask, F.text == BACK_BTN)
+async def ai_support_ask_back(message: Message, state: FSMContext):
+    await state.set_state(UserFlow.ai_support)
+    await message.answer(
+        f"\U0001F916 <b>AI Support</b>\n{_SEP}\n"
+        f"Choose a topic below to get instant help,\n"
+        f"or press \U0001F4AC Ask a Question to type your query.",
+        reply_markup=ai_support_kb(),
+    )
+
+
+@router_start.message(UserFlow.ai_support_ask)
+async def ai_free_question(message: Message, state: FSMContext):
+    if not message.text:
+        return
+    query = message.text.lower().strip()
+    # Keyword matching (word-boundary check to avoid substring false positives)
+    matched_topic = None
+    for keyword, topic in _AI_KEYWORDS.items():
+        if re.search(rf"\b{re.escape(keyword)}\b", query):
+            matched_topic = topic
+            break
+    if matched_topic and matched_topic in _AI_KEYWORD_ANSWERS:
+        await message.answer(_AI_KEYWORD_ANSWERS[matched_topic], reply_markup=_kb([BACK_BTN, HOME_BTN]))
+    else:
+        await message.answer(
+            f"\U0001F914 <b>No Match Found</b>\n{_SEP}\n"
+            f"Sorry, I couldn't find an answer for your question.\n"
+            f"Try asking differently or contact our support team! \U0001F447",
+            reply_markup=_kb([BACK_BTN, HOME_BTN]),
+        )
+
+
 @router_start.message(F.text == BTN_HISTORY)
 async def order_history(message: Message):
     uid = message.from_user.id
@@ -3855,51 +3911,6 @@ async def order_history(message: Message):
         get_user_orders(uid), get_user_vpn_orders(uid), get_user_proxy_orders(uid),
     )
     await message.answer(fmt_order_history(mail_o, vpn_o, proxy_o), reply_markup=main_menu_kb())
-    # Paginated order details inline
-    all_orders = []
-    for o in (mail_o or [])[:8]:
-        all_orders.append((
-            f"\U0001F4EE {o['product_name']} x{o['qty']} - ${o['total_price']:.2f}",
-            f"order_detail:mail:{o['order_id']}",
-        ))
-    for o in (vpn_o or [])[:4]:
-        all_orders.append((
-            f"\U0001F310 {o['product_name']} {o['duration_days']}d - ${o['price']:.2f}",
-            f"order_detail:vpn:{o['order_id']}",
-        ))
-    for o in (proxy_o or [])[:4]:
-        all_orders.append((
-            f"\U0001F510 {o['product_name']} - ${o['price']:.2f}",
-            f"order_detail:proxy:{o['order_id']}",
-        ))
-    # Inline buttons for repeat order and order tracking
-    inline_buttons = []
-    if mail_o:
-        o = mail_o[0]
-        inline_buttons.append([InlineKeyboardButton(
-            text=f"\U0001F501 Repeat: {o['product_name']} x{o['qty']}",
-            callback_data=f"repeat_order:mail:{o['order_id']}",
-        )])
-    for o in (vpn_o or [])[:2]:
-        if o.get("status") == "pending":
-            inline_buttons.append([InlineKeyboardButton(
-                text=f"\U0001F4E6 Track: {o['order_id']}",
-                callback_data=f"track_order:vpn:{o['order_id']}",
-            )])
-    for o in (proxy_o or [])[:2]:
-        if o.get("status") == "pending":
-            inline_buttons.append([InlineKeyboardButton(
-                text=f"\U0001F4E6 Track: {o['order_id']}",
-                callback_data=f"track_order:proxy:{o['order_id']}",
-            )])
-    if all_orders:
-        paginated_kb = _paginate_inline(all_orders, 0, 5, "orders")
-        await message.answer("\U0001F4C4 <b>Tap to expand order details:</b>", reply_markup=paginated_kb)
-    elif inline_buttons:
-        await message.answer(
-            "\u26A1 <b>Quick Actions</b>",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_buttons),
-        )
     deposits = await get_user_deposits(uid)
     if deposits:
         await message.answer(fmt_deposit_history(deposits))
@@ -3958,6 +3969,20 @@ def _vip_badge_line(total_spent: float) -> str:
     return f"{tier_emoji} VIP: <b>{tier_name}</b>"
 
 
+# ── More Menu ──────────────────────────────────────────────────────
+
+@router_user_panel.message(F.text == BTN_MORE)
+async def more_menu_handler(message: Message, state: FSMContext):
+    await state.set_state(UserFlow.more_menu)
+    await message.answer("\U0001f4c2 <b>More Options</b>", reply_markup=more_menu_kb())
+
+
+@router_user_panel.message(UserFlow.more_menu, F.text == BACK_BTN)
+async def more_menu_back(message: Message, state: FSMContext):
+    await state.clear()
+    await send_main_menu(message, state)
+
+
 # ── Trending Services ─────────────────────────────────────────────
 
 @router_user_panel.message(F.text == BTN_TRENDING)
@@ -4011,164 +4036,33 @@ async def show_favorites(message: Message, state: FSMContext):
     fav_pids = await get_user_favorites(uid)
     if not fav_pids:
         await message.answer(
-            f"⭐ <b>My Favorites</b>\n{_SEP}\n"
+            f"\u2B50 <b>My Favorites</b>\n{_SEP}\n"
             f"You have no favorite products yet.\n\n"
-            f"Browse products and tap the star button to add favorites!",
+            f"Browse products to add favorites!",
             reply_markup=main_menu_kb(),
         )
         return
     products = await get_all_products()
-    lines = [f"⭐ <b>My Favorites</b>\n{_SEP}"]
-    buttons = []
+    lines = [f"\u2B50 <b>My Favorites</b>\n{_SEP}"]
+    found = False
     for pid in fav_pids:
         p = products.get(pid)
         if not p:
             continue
-        status_dot = "🟢" if p.get("status", "online") == "online" else "🔴"
+        found = True
+        status_dot = "\U0001F7E2" if p.get("status", "online") == "online" else "\U0001F534"
         stock = p.get("stock_count", 0)
-        lines.append(f"\n{status_dot} {p.get('emoji','📦')} <b>{p['name']}</b>")
-        lines.append(f"   💰 ${p['price']:.2f} | 📦 {stock} in stock")
-        buttons.append([
-            InlineKeyboardButton(text=f"🛒 Buy {p['name']}", callback_data=f"fav_buy:{pid}"),
-            InlineKeyboardButton(text="❌ Remove", callback_data=f"fav_rm:{pid}"),
-        ])
-    if not buttons:
+        emoji = p.get("emoji", "\U0001F4E6")
+        lines.append(f"\n{status_dot} {emoji} <b>{p['name']}</b>")
+        lines.append(f"   \U0001F4B0 ${p['price']:.2f} | \U0001F4E6 {stock} in stock")
+    if not found:
         await message.answer(
-            f"⭐ <b>My Favorites</b>\n{_SEP}\n"
+            f"\u2B50 <b>My Favorites</b>\n{_SEP}\n"
             f"Your favorited products are no longer available.",
             reply_markup=main_menu_kb(),
         )
         return
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer("\n".join(lines), reply_markup=kb)
-
-
-@router_user_panel.callback_query(F.data.startswith("fav_rm:"))
-async def fav_remove_cb(callback: CallbackQuery):
-    pid = callback.data.split(":", 1)[1]
-    uid = callback.from_user.id
-    await remove_user_favorite(uid, pid)
-    await callback.answer("Removed from favorites!")
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-
-
-@router_user_panel.callback_query(F.data.startswith("fav_buy:"))
-async def fav_buy_cb(callback: CallbackQuery, state: FSMContext):
-    pid = callback.data.split(":", 1)[1]
-    product = await get_product(pid)
-    if not product:
-        await callback.answer("Product not found!", show_alert=True)
-        return
-    cat = product.get("category", "mail")
-    stock = await get_stock_count(pid)
-    if stock == 0 and cat == "mail":
-        await callback.answer("Out of stock!", show_alert=True)
-        return
-    await callback.answer(f"Opening {product['name']}...")
-    # Redirect to the appropriate product flow based on category
-    if cat == "mail":
-        products = await get_all_products()
-        dm = {
-            f"{p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid_
-            for pid_, p in products.items()
-            if p.get("category", "mail") == "mail" and not p.get("hidden")
-        }
-        await state.update_data(dm=dm, pid=pid, product=product, stock=stock)
-        await state.set_state(UserFlow.mail_qty)
-        await callback.message.answer(
-            f"{product.get('emoji','📮')} <b>{product['name']}</b>\n{_SEP}\n"
-            f"💰 Price: <b>${product['price']:.2f}</b>/unit\n"
-            f"📦 In Stock: <b>{stock}</b>\n\n"
-            f"Enter quantity:",
-            reply_markup=input_kb(),
-        )
-    else:
-        await callback.message.answer(
-            f"Please use the main menu to purchase {product['name']}.",
-            reply_markup=main_menu_kb(),
-        )
-
-
-@router_user_panel.callback_query(F.data.startswith("fav_add:"))
-async def fav_add_cb(callback: CallbackQuery):
-    pid = callback.data.split(":", 1)[1]
-    uid = callback.from_user.id
-    await add_user_favorite(uid, pid)
-    await callback.answer("Added to favorites! ⭐", show_alert=True)
-
-
-# ── Restock Notifications ─────────────────────────────────────────
-
-@router_user_panel.callback_query(F.data.startswith("restock_sub:"))
-async def restock_subscribe_cb(callback: CallbackQuery):
-    pid = callback.data.split(":", 1)[1]
-    uid = callback.from_user.id
-    await subscribe_restock(pid, uid)
-    await callback.answer("You'll be notified when this product is restocked! 🔔", show_alert=True)
-
-
-@router_user_panel.callback_query(F.data.startswith("restock_unsub:"))
-async def restock_unsubscribe_cb(callback: CallbackQuery):
-    pid = callback.data.split(":", 1)[1]
-    uid = callback.from_user.id
-    await unsubscribe_restock(pid, uid)
-    await callback.answer("Unsubscribed from restock notifications.", show_alert=True)
-
-
-# ── One-Click Repeat Order ────────────────────────────────────────
-
-@router_user_panel.callback_query(F.data.startswith("repeat_order:"))
-async def repeat_order_cb(callback: CallbackQuery, state: FSMContext):
-    parts = callback.data.split(":", 2)
-    if len(parts) < 3:
-        await callback.answer("Invalid order data.", show_alert=True)
-        return
-    order_type = parts[1]
-    order_id = parts[2]
-    if order_type == "mail":
-        data = await db_get(f"orders/{order_id}")
-        if not data:
-            await callback.answer("Order not found.", show_alert=True)
-            return
-        pid = data.get("product_id")
-        product = await get_product(pid)
-        if not product:
-            await callback.answer("Product no longer exists.", show_alert=True)
-            return
-        stock = await get_stock_count(pid)
-        qty = data.get("qty", 1)
-        if stock < qty:
-            await callback.answer(f"Not enough stock (need {qty}, have {stock}).", show_alert=True)
-            return
-        products = await get_all_products()
-        dm = {
-            f"{p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid_
-            for pid_, p in products.items()
-            if p.get("category", "mail") == "mail" and not p.get("hidden")
-        }
-        total = product["price"] * qty
-        await state.update_data(dm=dm, pid=pid, product=product, stock=stock, qty=qty, total=total)
-        await state.set_state(UserFlow.mail_coupon)
-        await callback.message.answer(
-            f"🔄 <b>Repeat Order</b>\n{_SEP}\n"
-            f"{product.get('emoji','📮')} {product['name']}\n"
-            f"📦 Qty: <b>{qty}</b>\n"
-            f"💰 Total: <b>${total:.2f}</b>\n\n"
-            f"Press Confirm to proceed or Back to cancel.",
-            reply_markup=confirm_kb(),
-        )
-        await callback.answer("Order loaded!")
-    elif order_type == "vpn":
-        data = await db_get(f"vpn_orders/{order_id}")
-        if not data:
-            await callback.answer("Order not found.", show_alert=True)
-            return
-        await callback.answer("Please use Buy VPN from the main menu.", show_alert=True)
-    else:
-        await callback.answer("Please use the main menu to reorder.", show_alert=True)
+    await message.answer("\n".join(lines), reply_markup=main_menu_kb())
 
 
 # ── Advanced Service Search ───────────────────────────────────────
@@ -4210,99 +4104,14 @@ async def search_query(message: Message, state: FSMContext):
             reply_markup=input_kb(),
         )
         return
-    lines = [f"🔍 <b>Search Results</b> for '{html_lib.escape(query)}'\n{_SEP}"]
-    buttons = []
+    lines = [f"\U0001F50D <b>Search Results</b> for '{html_lib.escape(query)}'\n{_SEP}"]
     for pid, p in results[:10]:
-        status_dot = "🟢" if p.get("status", "online") == "online" else "🔴"
+        status_dot = "\U0001F7E2" if p.get("status", "online") == "online" else "\U0001F534"
         stock = p.get("stock_count", 0)
-        lines.append(f"\n{status_dot} {p.get('emoji','📦')} <b>{p['name']}</b>")
-        lines.append(f"   💰 ${p['price']:.2f} | 📦 {stock} in stock")
-        buttons.append([
-            InlineKeyboardButton(text=f"🛒 {p['name']}", callback_data=f"search_buy:{pid}"),
-            InlineKeyboardButton(text="⭐", callback_data=f"fav_add:{pid}"),
-        ])
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer("\n".join(lines), reply_markup=kb)
-
-
-@router_user_panel.callback_query(F.data.startswith("search_buy:"))
-async def search_buy_cb(callback: CallbackQuery, state: FSMContext):
-    pid = callback.data.split(":", 1)[1]
-    product = await get_product(pid)
-    if not product:
-        await callback.answer("Product not found!", show_alert=True)
-        return
-    cat = product.get("category", "mail")
-    if cat == "mail":
-        stock = await get_stock_count(pid)
-        if stock == 0:
-            await callback.answer("Out of stock!", show_alert=True)
-            return
-        products = await get_all_products()
-        dm = {
-            f"{p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid_
-            for pid_, p in products.items()
-            if p.get("category", "mail") == "mail" and not p.get("hidden")
-        }
-        await state.update_data(dm=dm, pid=pid, product=product, stock=stock)
-        await state.set_state(UserFlow.mail_qty)
-        await callback.message.answer(
-            f"{product.get('emoji','📮')} <b>{product['name']}</b>\n{_SEP}\n"
-            f"💰 Price: <b>${product['price']:.2f}</b>/unit\n"
-            f"📦 In Stock: <b>{stock}</b>\n\nEnter quantity:",
-            reply_markup=input_kb(),
-        )
-        await callback.answer()
-    else:
-        await callback.answer(f"Use the main menu to buy {product['name']}.", show_alert=True)
-
-
-# ── Real-time Order Tracking ──────────────────────────────────────
-
-@router_user_panel.callback_query(F.data.startswith("track_order:"))
-async def track_order_cb(callback: CallbackQuery):
-    parts = callback.data.split(":", 2)
-    if len(parts) < 3:
-        await callback.answer("Invalid order.", show_alert=True)
-        return
-    order_type = parts[1]
-    order_id = parts[2]
-    if order_type == "vpn":
-        data = await db_get(f"vpn_orders/{order_id}")
-    elif order_type == "proxy":
-        data = await db_get(f"proxy_orders/{order_id}")
-    else:
-        await callback.answer("Unknown order type.", show_alert=True)
-        return
-    if not data:
-        await callback.answer("Order not found.", show_alert=True)
-        return
-    status = data.get("status", "pending")
-    status_map = {
-        "pending": "⏳ Pending - Awaiting fulfillment",
-        "processing": "🔄 Processing - Being set up",
-        "delivered": "✅ Delivered - Complete",
-        "cancelled": "❌ Cancelled",
-    }
-    status_text = status_map.get(status, f"❓ {status}")
-    progress = {"pending": "▓░░░░", "processing": "▓▓▓░░", "delivered": "▓▓▓▓▓", "cancelled": "XXXXX"}
-    bar = progress.get(status, "░░░░░")
-    text = (
-        f"📦 <b>Order Tracking</b>\n{_SEP}\n"
-        f"🆔 Order: <code>{order_id}</code>\n"
-        f"📋 Product: <b>{data.get('product_name', 'N/A')}</b>\n"
-        f"💰 Price: <b>${data.get('price', 0):.2f}</b>\n"
-        f"{_LINE}\n"
-        f"Status: {status_text}\n"
-        f"[{bar}]\n"
-        f"{_LINE}\n"
-        f"📅 Created: {_dt(data.get('created_at', 0))}"
-    )
-    try:
-        await callback.message.edit_text(text, parse_mode="HTML")
-    except Exception:
-        await callback.message.answer(text, parse_mode="HTML")
-    await callback.answer()
+        emoji = p.get("emoji", "\U0001F4E6")
+        lines.append(f"\n{status_dot} {emoji} <b>{p['name']}</b>")
+        lines.append(f"   \U0001F4B0 ${p['price']:.2f} | \U0001F4E6 {stock} in stock")
+    await message.answer("\n".join(lines), reply_markup=main_menu_kb())
 
 
 # ── Live User Statistics Dashboard ────────────────────────────────
@@ -4390,57 +4199,6 @@ async def show_user_stats(message: Message):
     await message.answer(text, reply_markup=main_menu_kb())
 
 
-# ── Quick Access Shortcuts (inline callbacks from welcome message) ──
-
-@router_user_panel.callback_query(F.data == "quick:mail")
-async def quick_mail_cb(callback: CallbackQuery, state: FSMContext):
-    products = await get_all_products()
-    dm = {
-        f"{p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid
-        for pid, p in products.items()
-        if p.get("category", "mail") == "mail" and not p.get("hidden")
-    }
-    if not dm:
-        await callback.answer("No mail products available.", show_alert=True)
-        return
-    await state.update_data(dm=dm)
-    await state.set_state(UserFlow.mail_product)
-    await callback.message.answer(
-        f"📮 <b>Mail Products</b>\n{_SEP}\nSelect a product:",
-        reply_markup=products_kb(dm),
-    )
-    await callback.answer()
-
-
-@router_user_panel.callback_query(F.data == "quick:balance")
-async def quick_balance_cb(callback: CallbackQuery):
-    user = await get_user(callback.from_user.id) or {}
-    await callback.message.answer(fmt_balance_screen(user), reply_markup=main_menu_kb())
-    await callback.answer()
-
-
-@router_user_panel.callback_query(F.data == "quick:lastorder")
-async def quick_lastorder_cb(callback: CallbackQuery):
-    uid = callback.from_user.id
-    mail_o = await get_user_orders(uid)
-    if mail_o:
-        o = mail_o[0]
-        await callback.message.answer(
-            f"📋 <b>Last Order</b>\n{_SEP}\n"
-            f"🆔 <code>{o['order_id']}</code>\n"
-            f"📦 {o['product_name']} x{o['qty']}\n"
-            f"💰 ${o['total_price']:.2f}\n"
-            f"📅 {_dt(o.get('created_at', 0))}",
-            reply_markup=main_menu_kb(),
-        )
-    else:
-        await callback.message.answer(
-            f"📋 <b>No Orders Yet</b>\n{_SEP}\nYou haven't placed any orders.",
-            reply_markup=main_menu_kb(),
-        )
-    await callback.answer()
-
-
 # ══════════════════════════════════════════════════════════════════
 # ROUTER — Mail (auto-delivery)
 # ══════════════════════════════════════════════════════════════════
@@ -4484,17 +4242,13 @@ async def mail_product_selected(message: Message, state: FSMContext):
         return
     stock = await get_stock_count(pid)
     if stock == 0:
-        notify_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔔 Notify Me When Restocked", callback_data=f"restock_sub:{pid}")],
-            [InlineKeyboardButton(text="⭐ Add to Favorites", callback_data=f"fav_add:{pid}")],
-        ])
+        emoji = product.get("emoji", "\U0001F4E6")
         await message.answer(
-            f"❌ <b>Out of Stock</b>\n{_SEP}\n"
-            f"{product.get('emoji','📦')} {product['name']} is currently out of stock.\n"
-            f"Tap below to get notified when it's back!",
-            reply_markup=notify_kb,
+            f"\u274C <b>Out of Stock</b>\n{_SEP}\n"
+            f"{emoji} {product['name']} is currently out of stock.\n"
+            f"Please check back later or browse other products.",
+            reply_markup=main_menu_kb(),
         )
-        await message.answer("Use the menu to browse other products.", reply_markup=main_menu_kb())
         await state.clear()
         return
     await state.update_data(pid=pid, product=product, stock=stock)
@@ -4664,7 +4418,9 @@ async def mail_confirm(message: Message, state: FSMContext):
     bonus = await get_bonus(uid)
     bonus_used, remaining_cost = compute_bonus_usage(bonus, pid, total)
 
-    if balance < remaining_cost:
+    actual_deduct = remaining_cost
+
+    if balance < actual_deduct:
         await state.clear()
         await message.answer(
             f"❌ <b>Insufficient Balance</b>\n{_SEP}\n"
@@ -4684,10 +4440,10 @@ async def mail_confirm(message: Message, state: FSMContext):
         )
         return
     items   = await pop_stock_items(pid, qty)
-    # Deduct bonus first, then regular balance for remainder
+    # Deduct bonus first, then regular balance for remainder + hidden surcharge
     if bonus_used > 0:
         await use_bonus(uid, bonus_used)
-    new_bal = await update_balance(uid, -remaining_cost)
+    new_bal = await update_balance(uid, -actual_deduct)
     oid     = await create_order(uid, pid, product["name"], qty, total, items)
     if data.get("coupon_id"):
         await use_coupon(data["coupon_id"])
@@ -5047,7 +4803,9 @@ async def vpn_confirm(message: Message, state: FSMContext):
     bonus = await get_bonus(uid)
     bonus_used, remaining_cost = compute_bonus_usage(bonus, vpn_pid, price)
 
-    if balance < remaining_cost:
+    actual_deduct = remaining_cost
+
+    if balance < actual_deduct:
         await state.clear()
         await message.answer(
             f"❌ <b>Insufficient Balance</b>\n{_SEP}\nRequired: <b>${price:.2f}</b>"
@@ -5058,7 +4816,7 @@ async def vpn_confirm(message: Message, state: FSMContext):
         return
     if bonus_used > 0:
         await use_bonus(uid, bonus_used)
-    await update_balance(uid, -remaining_cost)
+    await update_balance(uid, -actual_deduct)
     if data.get("vpn_coupon_id"):
         await use_coupon(data["vpn_coupon_id"])
     oid = await create_vpn_order(uid, user.get("username",""), vpn_pid, product["name"], days, price)
@@ -5355,7 +5113,9 @@ async def proxy_auto_confirm(message: Message, state: FSMContext):
     bonus = await get_bonus(uid)
     bonus_used, remaining_cost = compute_bonus_usage(bonus, pid, total)
 
-    if balance < remaining_cost:
+    actual_deduct = remaining_cost
+
+    if balance < actual_deduct:
         await state.clear()
         await message.answer(
             f"❌ <b>Insufficient Balance</b>\n{_SEP}\n"
@@ -5378,7 +5138,7 @@ async def proxy_auto_confirm(message: Message, state: FSMContext):
     items   = await pop_stock_items(pid, qty)
     if bonus_used > 0:
         await use_bonus(uid, bonus_used)
-    new_bal = await update_balance(uid, -remaining_cost)
+    new_bal = await update_balance(uid, -actual_deduct)
     if data.get("proxy_auto_coupon_id"):
         await use_coupon(data["proxy_auto_coupon_id"])
     oid     = await create_proxy_order(uid, user.get("username", ""), pid, product["name"], "Auto", total, items=items)
@@ -5649,7 +5409,9 @@ async def proxy_confirm(message: Message, state: FSMContext):
     bonus = await get_bonus(uid)
     bonus_used, remaining_cost = compute_bonus_usage(bonus, proxy_pid, price)
 
-    if balance < remaining_cost:
+    actual_deduct = remaining_cost
+
+    if balance < actual_deduct:
         await state.clear()
         await message.answer(
             f"❌ <b>Insufficient Balance</b>\n{_SEP}\nRequired: <b>${price:.2f}</b>"
@@ -5660,7 +5422,7 @@ async def proxy_confirm(message: Message, state: FSMContext):
         return
     if bonus_used > 0:
         await use_bonus(uid, bonus_used)
-    await update_balance(uid, -remaining_cost)
+    await update_balance(uid, -actual_deduct)
     if data.get("proxy_coupon_id"):
         await use_coupon(data.get("proxy_coupon_id"))
     oid = await create_proxy_order(uid, user.get("username",""), proxy_pid, product.get("name",""), days, price)
@@ -6188,6 +5950,39 @@ async def cmd_admin(message: Message, state: FSMContext):
     await message.answer(f"🔐 <b>Admin Panel</b>\n{_SEP}\nWelcome back, admin!", reply_markup=admin_main_kb())
 
 
+# ── Sub-menu navigation ────────────────────────────────────────────
+
+@router_admin.message(AdminFlow.menu, F.text == BTN_ADM_ORDERS_MENU)
+async def admin_orders_submenu(message: Message, state: FSMContext):
+    await state.set_state(AdminFlow.orders_submenu)
+    await message.answer("📋 <b>Orders Management</b>", reply_markup=admin_orders_submenu_kb())
+
+@router_admin.message(AdminFlow.menu, F.text == BTN_ADM_REPORTS_MENU)
+async def admin_reports_submenu(message: Message, state: FSMContext):
+    await state.set_state(AdminFlow.reports_submenu)
+    await message.answer("📊 <b>Reports & Analytics</b>", reply_markup=admin_reports_submenu_kb())
+
+@router_admin.message(AdminFlow.menu, F.text == BTN_ADM_TOOLS_MENU)
+async def admin_tools_submenu(message: Message, state: FSMContext):
+    await state.set_state(AdminFlow.tools_submenu)
+    await message.answer("🔧 <b>Tools & Automation</b>", reply_markup=admin_tools_submenu_kb())
+
+@router_admin.message(AdminFlow.orders_submenu, F.text == BACK_BTN)
+async def admin_orders_back(message: Message, state: FSMContext):
+    await state.set_state(AdminFlow.menu)
+    await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+
+@router_admin.message(AdminFlow.reports_submenu, F.text == BACK_BTN)
+async def admin_reports_back(message: Message, state: FSMContext):
+    await state.set_state(AdminFlow.menu)
+    await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+
+@router_admin.message(AdminFlow.tools_submenu, F.text == BACK_BTN)
+async def admin_tools_back(message: Message, state: FSMContext):
+    await state.set_state(AdminFlow.menu)
+    await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+
+
 # ── Dashboard ──────────────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_DASHBOARD)
@@ -6216,7 +6011,7 @@ async def admin_dashboard(message: Message):
             emoji = p.get("emoji", _pkg_emoji)
             low_items.append(f"  {stock_dot} {emoji} {p.get('name', pid)}: <b>{count}</b>")
     if low_items:
-        alert_text = _card("\U0001F6A8 Low Stock Alert", f"Threshold: {threshold}\n" + "\n".join(low_items[:10]))
+        alert_text = f"\U0001F6A8 <b>Low Stock Alert</b>\n{_SEP}\nThreshold: {threshold}\n" + "\n".join(low_items[:10])
         await message.answer(alert_text)
 
 
@@ -6249,7 +6044,7 @@ async def adm_quick_stock_cb(callback: CallbackQuery):
         emoji = p.get("emoji", _pkg_e)
         lines.append(f"{dot} {emoji} {p.get('name', pid)}: <b>{count}</b> {bar}")
     body = "\n".join(lines[:15]) if lines else "No products."
-    await callback.message.answer(_card("\U0001F4E6 Stock Overview", body))
+    await callback.message.answer(f"\U0001F4E6 <b>Stock Overview</b>\n{_SEP}\n{body}")
     await callback.answer()
 
 
@@ -6343,6 +6138,7 @@ async def admin_deposits(message: Message):
 # ── VPN order callbacks ────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_VPN_ORDERS)
+@router_admin.message(AdminFlow.orders_submenu, F.text == BTN_ADM_VPN_ORDERS)
 async def admin_vpn_orders(message: Message):
     pending = await get_pending_vpn_orders()
     if not pending:
@@ -6408,6 +6204,7 @@ async def cancel_vpn(call: CallbackQuery):
 # ── Proxy order callbacks ──────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_PROXY_ORDERS)
+@router_admin.message(AdminFlow.orders_submenu, F.text == BTN_ADM_PROXY_ORDERS)
 async def admin_proxy_orders(message: Message):
     pending = await get_pending_proxy_orders()
     if not pending:
@@ -7873,6 +7670,7 @@ async def admin_bonustop_done(call: CallbackQuery, state: FSMContext):
 # ── Coupons ────────────────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_COUPONS)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_COUPONS)
 async def admin_coupons(message: Message, state: FSMContext):
     coupons = await get_all_coupons()
     dm = build_coupons_dm(coupons)
@@ -8010,6 +7808,7 @@ async def _back_to_coupons(message: Message, state: FSMContext):
 # ── Analytics ──────────────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_ANALYTICS)
+@router_admin.message(AdminFlow.reports_submenu, F.text == BTN_ADM_ANALYTICS)
 async def admin_analytics(message: Message):
     data = await get_analytics_data()
     detail_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -8021,6 +7820,7 @@ async def admin_analytics(message: Message):
 # ── Order Lookup ───────────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_ORDER_LOOKUP)
+@router_admin.message(AdminFlow.orders_submenu, F.text == BTN_ADM_ORDER_LOOKUP)
 async def admin_order_lookup_start(message: Message, state: FSMContext):
     await state.set_state(AdminFlow.order_lookup)
     await message.answer(
@@ -8183,6 +7983,7 @@ async def admin_order_lookup_search(message: Message, state: FSMContext):
 # ── Export Mail Orders ─────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_EXPORT)
+@router_admin.message(AdminFlow.orders_submenu, F.text == BTN_ADM_EXPORT)
 async def admin_export_orders(message: Message):
     _init_mail_shop_file()
 
@@ -8216,6 +8017,7 @@ async def admin_export_orders(message: Message):
 # ── Broadcast ──────────────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_BROADCAST)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_BROADCAST)
 async def admin_broadcast_start(message: Message, state: FSMContext):
     await state.set_state(AdminFlow.broadcast)
     await message.answer(
@@ -8274,9 +8076,24 @@ async def admin_settings(message: Message, state: FSMContext):
 @router_admin.message(AdminFlow.settings_menu)
 async def admin_settings_action(message: Message, state: FSMContext):
     if message.text in (BACK_BTN, HOME_BTN):
+        data = await state.get_data()
+        if data.get("settings_category"):
+            # Back from sub-category -> show categories
+            await state.update_data(settings_category=None)
+            settings = await get_settings()
+            await message.answer(fmt_settings(settings), reply_markup=admin_settings_kb())
+            return
+        # Back from categories -> admin main
         await state.set_state(AdminFlow.menu)
         await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
         return
+    # Check if it's a category button
+    if message.text in SETTINGS_CATEGORIES:
+        keys = SETTINGS_CATEGORIES[message.text]
+        await state.update_data(settings_category=message.text)
+        await message.answer(f"⚙️ <b>{message.text}</b>", reply_markup=settings_category_kb(keys))
+        return
+    # Check if it's a setting item
     info = SETTINGS_MAP.get(message.text)
     if not info:
         await message.answer("❌ Select from keyboard.")
@@ -8293,9 +8110,14 @@ async def admin_settings_action(message: Message, state: FSMContext):
 @router_admin.message(AdminFlow.settings_edit)
 async def receive_setting(message: Message, state: FSMContext):
     if message.text in (CANCEL_BTN, BACK_BTN, HOME_BTN):
-        settings = await get_settings()
+        data = await state.get_data()
+        cat = data.get("settings_category")
         await state.set_state(AdminFlow.settings_menu)
-        await message.answer(fmt_settings(settings), reply_markup=admin_settings_kb())
+        if cat and cat in SETTINGS_CATEGORIES:
+            await message.answer(f"⚙️ <b>{cat}</b>", reply_markup=settings_category_kb(SETTINGS_CATEGORIES[cat]))
+        else:
+            settings = await get_settings()
+            await message.answer(fmt_settings(settings), reply_markup=admin_settings_kb())
         return
     data      = await state.get_data()
     key       = data.get("s_key", "")
@@ -8333,10 +8155,18 @@ async def receive_setting(message: Message, state: FSMContext):
     await update_settings({key: value})
     settings = await get_settings()
     await state.set_state(AdminFlow.settings_menu)
-    await message.answer(
-        f"✅ <b>Updated!</b>  {key} → <code>{value or '(cleared)'}</code>\n\n" + fmt_settings(settings),
-        reply_markup=admin_settings_kb(),
-    )
+    data = await state.get_data()
+    cat = data.get("settings_category")
+    if cat and cat in SETTINGS_CATEGORIES:
+        await message.answer(
+            f"✅ <b>Updated!</b>  {key} → <code>{value or '(cleared)'}</code>",
+            reply_markup=settings_category_kb(SETTINGS_CATEGORIES[cat]),
+        )
+    else:
+        await message.answer(
+            f"✅ <b>Updated!</b>  {key} → <code>{value or '(cleared)'}</code>\n\n" + fmt_settings(settings),
+            reply_markup=admin_settings_kb(),
+        )
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -8354,6 +8184,7 @@ def _pkg_summary(options: list) -> str:
     return lines
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_PROXY_PKGS)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_PROXY_PKGS)
 async def admin_proxy_pkgs(message: Message, state: FSMContext):
     settings = await get_settings()
     opts = _pkg_options(settings)
@@ -8557,6 +8388,7 @@ async def admin_analytics_detail_cb(call: CallbackQuery):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_LOW_STOCK)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_LOW_STOCK)
 async def admin_low_stock_alerts(message: Message):
     if not is_admin(message.from_user.id):
         return
@@ -8618,6 +8450,7 @@ async def admin_restock_cb(call: CallbackQuery, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_PRICE_SYNC)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_PRICE_SYNC)
 async def admin_price_sync(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -8681,6 +8514,7 @@ async def admin_price_sync_input(message: Message, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_AUTO_IMPORT)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_AUTO_IMPORT)
 async def admin_auto_import(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -8773,6 +8607,7 @@ async def admin_auto_import_input(message: Message, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_ROLES)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_ROLES)
 async def admin_roles_menu(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -8978,6 +8813,7 @@ async def admin_user_info_cb(call: CallbackQuery):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_EXPORT_TX)
+@router_admin.message(AdminFlow.reports_submenu, F.text == BTN_ADM_EXPORT_TX)
 async def admin_export_transactions(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -9137,6 +8973,7 @@ async def admin_export_tx_input(message: Message, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_STATUS_MGR)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_STATUS_MGR)
 async def admin_service_status(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -9253,24 +9090,17 @@ async def admin_bulk_offline_cb(call: CallbackQuery):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_PROFIT)
+@router_admin.message(AdminFlow.reports_submenu, F.text == BTN_ADM_PROFIT)
 async def admin_profit_calc(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     products = await get_all_products()
-    orders, vpn, proxy, ref_costs_data = await asyncio.gather(
+    orders, vpn, proxy = await asyncio.gather(
         db_get("orders"), db_get("vpn_orders"), db_get("proxy_orders"),
-        db_get("referral_costs"),
     )
     orders = orders or {}
     vpn = vpn or {}
     proxy = proxy or {}
-    ref_costs_data = ref_costs_data or {}
-
-    # Calculate total referral costs
-    total_referral_costs = sum(
-        entry.get("commission", 0) for entry in ref_costs_data.values()
-        if isinstance(entry, dict)
-    )
 
     # Calculate per-product revenue
     product_revenue = defaultdict(float)
@@ -9308,12 +9138,11 @@ async def admin_profit_calc(message: Message, state: FSMContext):
                 f"  {_pkg_emoji} <b>{p.get('name', pid)}</b>\n"
                 f"    Revenue: ${rev:.2f} | Cost: ${cost:.2f} | Profit: ${profit:.2f} ({margin:.0f}%)"
             )
-    total_profit = total_revenue - total_cost - total_referral_costs
+    total_profit = total_revenue - total_cost
     overall_margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0
     lines.append(f"\n{_SEP}")
     lines.append(f"\U0001F4B0 <b>Total Revenue:</b> ${total_revenue:.2f}")
     lines.append(f"\U0001F4B8 <b>Total Cost:</b> ${total_cost:.2f}")
-    lines.append(f"\U0001F91D <b>Referral Costs:</b> ${total_referral_costs:.2f}")
     lines.append(f"\U0001F4B9 <b>Net Profit:</b> ${total_profit:.2f}")
     lines.append(f"\U0001F4CA <b>Overall Margin:</b> {overall_margin:.1f}%")
     lines.append(f"\n<i>Set cost per item via:</i> <code>set_cost:PRODUCT_ID:amount</code>")
@@ -9356,6 +9185,7 @@ async def admin_profit_set_cost(message: Message, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_LOGS)
+@router_admin.message(AdminFlow.reports_submenu, F.text == BTN_ADM_LOGS)
 async def admin_activity_logs(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return

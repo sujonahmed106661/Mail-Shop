@@ -1,0 +1,7 @@
+{
+  "task_id": "task-design-fix-ai-support-audit",
+  "task_description": "Fix the ugly box-drawing card design back to original clean style, add AI Support FAQ feature, and audit all code for issues",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001"],
+  "blocked_reason": null
+}

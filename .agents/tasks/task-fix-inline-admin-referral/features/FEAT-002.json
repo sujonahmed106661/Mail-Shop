@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-002",
+  "type": "fix",
+  "description": "Compact the admin panel by grouping features into sub-menus. Currently admin_main_kb() has 20+ buttons. Reduce to ~8-10 buttons by grouping related features under sub-menus accessible via new reply keyboard buttons.",
+  "status": "completed",
+  "steps": [
+    "Create new admin sub-menu button constants: BTN_ADM_REPORTS = _b('📊 Reports'), BTN_ADM_TOOLS = _b('🔧 Tools'), BTN_ADM_ORDERS = _b('📋 Orders')",
+    "Redesign admin_main_kb() to show only compact main menu (8-10 buttons max): Dashboard, Products, Stock, Users, Deposits, Orders (sub-menu), Reports (sub-menu), Tools (sub-menu), Settings, Home. This reduces from 22 buttons to ~10.",
+    "Create admin_orders_submenu_kb() with: VPN Orders, Proxy Orders, Order Lookup, Export Mail Orders, Back, Home",
+    "Create admin_reports_submenu_kb() with: Analytics, Profit Calculator, Export Transactions, Activity Logs, Back, Home",
+    "Create admin_tools_submenu_kb() with: Low Stock Alerts, Service Status, Price Sync, Auto Import, Roles, Broadcast, Coupons, Data Packages, Back, Home",
+    "Add new FSM states or reuse AdminFlow.menu for sub-menus. Add AdminFlow.orders_submenu, AdminFlow.reports_submenu, AdminFlow.tools_submenu states.",
+    "Add message handlers for the new sub-menu buttons (BTN_ADM_REPORTS, BTN_ADM_TOOLS, BTN_ADM_ORDERS) that set the appropriate state and show the sub-menu keyboard.",
+    "Update the BACK_BTN handler in admin context: when in a sub-menu state, pressing Back returns to admin_main_kb() instead of going all the way home.",
+    "Ensure all existing admin feature handlers still trigger correctly from their sub-menus (the button text constants remain the same, just the keyboards showing them change)."
+  ],
+  "acceptance_criteria": [
+    "admin_main_kb() shows 10 or fewer buttons (excluding Home)",
+    "All admin features remain accessible through sub-menus",
+    "Sub-menus have Back button that returns to admin main menu",
+    "AST validation passes",
+    "No functionality is lost - all admin features still work"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+    "grep -A 20 'def admin_main_kb' bot.py | grep -c 'BTN_ADM' should show ~7-8 buttons (compact)",
+    "grep 'admin_orders_submenu_kb\\|admin_reports_submenu_kb\\|admin_tools_submenu_kb' bot.py should find all three sub-menu functions"
+  ],
+  "blocked_reason": null,
+  "findings": "Reduced admin_main_kb from 22+ buttons to 9 (excluding Home). Created 3 sub-menu keyboards (orders, reports, tools). Added 3 new AdminFlow states and navigation handlers. Used dual-decorator pattern on 13 handlers to make them respond from both AdminFlow.menu and their respective sub-menu states. AST validation passes."
+}
