@@ -891,7 +891,7 @@ async def get_referral_info(uid: int) -> dict:
 
 
 async def set_referrer(uid: int, referrer_uid: int) -> None:
-    await db_set(f"users/{uid}/referral", {
+    await db_update(f"users/{uid}/referral", {
         "referred_by": referrer_uid,
         "referred_count": 0,
         "total_earned": 0.0,
@@ -911,6 +911,31 @@ async def add_referral_earning(referrer_uid: int, amount: float, from_uid: int, 
     ref_info = await get_referral_info(referrer_uid)
     new_total = round(ref_info.get("total_earned", 0.0) + amount, 4)
     await db_update(f"users/{referrer_uid}/referral", {"total_earned": new_total})
+
+
+async def pay_referral_commission(bot: Bot, buyer_uid: int, purchase_amount: float, order_id: str) -> None:
+    """Pay referral commission to the buyer's referrer, if any."""
+    try:
+        ref_info = await get_referral_info(buyer_uid)
+        referrer_uid = ref_info.get("referred_by")
+        if referrer_uid:
+            settings = await get_settings()
+            bonus_pct = settings.get("referral_bonus_pct", 5.0)
+            commission = round(purchase_amount * bonus_pct / 100, 4)
+            if commission > 0:
+                await update_balance(referrer_uid, commission)
+                await add_referral_earning(referrer_uid, commission, buyer_uid, order_id)
+                try:
+                    await bot.send_message(
+                        referrer_uid,
+                        f"\U0001f3af <b>Referral Bonus!</b>\n{'━' * 22}\n"
+                        f"Your referral made a purchase.\n"
+                        f"\U0001f4b0 Commission: <b>${commission:.2f}</b> credited to your balance.",
+                    )
+                except Exception:
+                    pass
+    except Exception as _ref_err:
+        logger.warning("Referral commission failed: %s", _ref_err)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2839,12 +2864,6 @@ async def cmd_start(message: Message, state: FSMContext):
                 ref_info = await get_referral_info(message.from_user.id)
                 if not ref_info.get("referred_by"):
                     await set_referrer(message.from_user.id, ref_uid)
-        else:
-            ref_info = await get_referral_info(message.from_user.id)
-            if not ref_info.get("referred_by"):
-                referrer = await get_user(ref_uid)
-                if referrer:
-                    await set_referrer(message.from_user.id, ref_uid)
     await send_main_menu(message, state)
 
 
@@ -3579,27 +3598,7 @@ async def mail_confirm(message: Message, state: FSMContext):
     await message.answer(fmt_order_receipt(oid, product["name"], qty, total, items, new_bal) + bonus_note, reply_markup=main_menu_kb())
 
     # ── Referral commission ──
-    try:
-        ref_info = await get_referral_info(uid)
-        referrer_uid = ref_info.get("referred_by")
-        if referrer_uid:
-            settings = await get_settings()
-            bonus_pct = settings.get("referral_bonus_pct", 5.0)
-            commission = round(total * bonus_pct / 100, 4)
-            if commission > 0:
-                await update_balance(referrer_uid, commission)
-                await add_referral_earning(referrer_uid, commission, uid, oid)
-                try:
-                    await message.bot.send_message(
-                        referrer_uid,
-                        f"🎯 <b>Referral Bonus!</b>\n{_SEP}\n"
-                        f"Your referral made a purchase.\n"
-                        f"💰 Commission: <b>${commission:.2f}</b> credited to your balance.",
-                    )
-                except Exception:
-                    pass
-    except Exception as _ref_err:
-        logger.warning("Referral commission failed: %s", _ref_err)
+    await pay_referral_commission(message.bot, uid, total, oid)
 
     # ── Auto-set mail session when exactly 1 item is purchased ────────
     if qty == 1 and items:
@@ -3963,27 +3962,7 @@ async def vpn_confirm(message: Message, state: FSMContext):
     bonus_note = f"\n🎁 Paid from Bonus: ${bonus_used:.2f}" if bonus_used > 0 else ""
     await message.answer(fmt_service_order_placed("🌐", "VPN", oid, product["name"], days, price) + bonus_note, reply_markup=main_menu_kb())
     # ── Referral commission ──
-    try:
-        ref_info = await get_referral_info(uid)
-        referrer_uid = ref_info.get("referred_by")
-        if referrer_uid:
-            settings = await get_settings()
-            bonus_pct = settings.get("referral_bonus_pct", 5.0)
-            commission = round(price * bonus_pct / 100, 4)
-            if commission > 0:
-                await update_balance(referrer_uid, commission)
-                await add_referral_earning(referrer_uid, commission, uid, oid)
-                try:
-                    await message.bot.send_message(
-                        referrer_uid,
-                        f"🎯 <b>Referral Bonus!</b>\n{_SEP}\n"
-                        f"Your referral made a purchase.\n"
-                        f"💰 Commission: <b>${commission:.2f}</b> credited to your balance.",
-                    )
-                except Exception:
-                    pass
-    except Exception as _ref_err:
-        logger.warning("Referral commission failed: %s", _ref_err)
+    await pay_referral_commission(message.bot, uid, price, oid)
     for adm in ADMIN_IDS:
         try:
             await message.bot.send_message(
@@ -4592,27 +4571,7 @@ async def proxy_confirm(message: Message, state: FSMContext):
         reply_markup=main_menu_kb()
     )
     # ── Referral commission ──
-    try:
-        ref_info = await get_referral_info(uid)
-        referrer_uid = ref_info.get("referred_by")
-        if referrer_uid:
-            settings = await get_settings()
-            bonus_pct = settings.get("referral_bonus_pct", 5.0)
-            commission = round(price * bonus_pct / 100, 4)
-            if commission > 0:
-                await update_balance(referrer_uid, commission)
-                await add_referral_earning(referrer_uid, commission, uid, oid)
-                try:
-                    await message.bot.send_message(
-                        referrer_uid,
-                        f"🎯 <b>Referral Bonus!</b>\n{_SEP}\n"
-                        f"Your referral made a purchase.\n"
-                        f"💰 Commission: <b>${commission:.2f}</b> credited to your balance.",
-                    )
-                except Exception:
-                    pass
-    except Exception as _ref_err:
-        logger.warning("Referral commission failed: %s", _ref_err)
+    await pay_referral_commission(message.bot, uid, price, oid)
     for adm in ADMIN_IDS:
         try:
             await message.bot.send_message(
@@ -7419,7 +7378,7 @@ async def backup_loop(bot: Bot) -> None:
             user_count = len(users)
             order_count = len(orders)
             total_revenue = sum(
-                float(o.get("total", 0)) for o in orders.values() if isinstance(o, dict)
+                float(o.get("total_price", 0)) for o in orders.values() if isinstance(o, dict)
             )
 
             date_str = time.strftime("%Y%m%d_%H%M", time.gmtime())
