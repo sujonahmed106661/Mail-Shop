@@ -2,7 +2,7 @@
   "id": "FEAT-001",
   "type": "fix",
   "description": "Remove ALL user-facing Inline Keyboards and convert navigation to Reply Keyboards. Remove quick navigation inline panel from welcome message, paginated order history inline, repeat order inline buttons, favorites inline buttons, restock notification inline buttons, search results inline buttons, out-of-stock inline buttons, and all nav_ callback handlers. Keep ONLY admin-only approval inline keyboards (deposit_review_inline, order_review_inline) and 2FA inline keyboards (tfa_inline_kb, tfa_nokey_kb) and the force-join inline keyboard (has URL buttons only, no callback). Also keep admin-only inline keyboards for bonus product selection, service status toggle, advanced user search, analytics detail, logs pagination, low stock restock, and admin quick actions since these are admin-exclusive tools. Remove the _inline_row(), _paginate_inline(), _quick_actions_inline() utility functions. Remove InlineKeyboardButton and InlineKeyboardMarkup from imports if no longer needed (but they ARE still needed for admin approval and 2FA buttons).",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "In bot.py around line 3038-3048: Remove the quick_kb InlineKeyboardMarkup and the second message.answer call that sends 'Quick Navigation' with quick_kb in the send_main_menu function. Keep only the first message.answer with reply_markup=main_menu_kb().",
     "Remove ALL nav_ callback handlers (lines ~3069-3150): nav_home_cb, nav_balance_cb, nav_mail_cb, nav_history_cb, nav_admin_cb, nav_deposit_cb, nav_orders_page_cb (paginated history), nav_order_detail_cb (order detail). These are the '# Inline Navigation Callbacks' section.",
@@ -32,5 +32,5 @@
     "grep 'repeat_order:\\|search_buy:\\|fav_rm:\\|fav_buy:\\|restock_sub:\\|restock_unsub:' bot.py | grep -v 'router_admin\\|adm_' should return no matches for user-facing callbacks"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "Removed 413 lines of user-facing inline keyboard code. Python 3.9 on sandbox does not support backslash in f-string expressions - used local variables instead. _quick_actions_inline kept because admin dashboard uses it. track_order_cb handler kept as it was not in the removal list. All nav_ references completely eliminated. 30 InlineKeyboardMarkup usages remain (all admin/2FA/URL-only)."
 }
