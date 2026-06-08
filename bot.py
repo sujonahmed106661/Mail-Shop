@@ -930,7 +930,18 @@ async def add_referral_earning(referrer_uid: int, amount: float, from_uid: int, 
 
 
 async def pay_referral_commission(bot: Bot, buyer_uid: int, purchase_amount: float, order_id: str) -> None:
-    """Pay referral commission to the buyer's referrer, if any."""
+    """Pay referral commission to the buyer's referrer from shop revenue.
+
+    How it works:
+    - The buyer pays the FULL product price (no discount for them).
+    - The referrer receives a commission (percentage of purchase_amount).
+    - This commission comes FROM the shop's revenue, not as extra money.
+    - Effective shop revenue = purchase_amount - commission.
+    - The shop owner never loses money beyond this agreed margin.
+
+    A 'referral_costs' log entry is stored so the owner can track
+    how much revenue was shared with referrers.
+    """
     try:
         ref_info = await get_referral_info(buyer_uid)
         referrer_uid = ref_info.get("referred_by")
@@ -939,14 +950,26 @@ async def pay_referral_commission(bot: Bot, buyer_uid: int, purchase_amount: flo
             bonus_pct = settings.get("referral_bonus_pct", 5.0)
             commission = round(purchase_amount * bonus_pct / 100, 4)
             if commission > 0:
+                # Credit referrer - this amount is deducted from shop revenue (not extra)
                 await update_balance(referrer_uid, commission)
                 await add_referral_earning(referrer_uid, commission, buyer_uid, order_id)
+                # Log this as a revenue cost so the owner can audit
+                await db_push("referral_costs", {
+                    "order_id": order_id,
+                    "buyer_uid": buyer_uid,
+                    "referrer_uid": referrer_uid,
+                    "purchase_amount": purchase_amount,
+                    "commission": commission,
+                    "effective_revenue": round(purchase_amount - commission, 4),
+                    "ts": int(time.time()),
+                })
                 try:
                     await bot.send_message(
                         referrer_uid,
                         f"\U0001f3af <b>Referral Bonus!</b>\n{'━' * 22}\n"
                         f"Your referral made a purchase.\n"
-                        f"\U0001f4b0 Commission: <b>${commission:.2f}</b> credited to your balance.",
+                        f"\U0001f4b0 Commission: <b>${commission:.2f}</b> credited to your balance.\n"
+                        f"<i>(From shop revenue share)</i>",
                     )
                 except Exception:
                     pass
@@ -4277,7 +4300,10 @@ async def track_order_cb(callback: CallbackQuery):
         f"{_LINE}\n"
         f"📅 Created: {_dt(data.get('created_at', 0))}"
     )
-    await callback.message.edit_text(text, parse_mode="HTML")
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
 
@@ -5392,6 +5418,9 @@ async def proxy_auto_confirm(message: Message, state: FSMContext):
 
     # Low stock alert
     await _check_low_stock_alert(message.bot, pid, product['name'])
+
+    # ── Referral commission ──
+    await pay_referral_commission(message.bot, uid, total, oid)
 
 
 # ── MANUAL PROXY — duration & confirm ──────────────────────────────
