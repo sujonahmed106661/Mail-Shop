@@ -1,0 +1,26 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Maintenance Mode - Admin can enable/disable maintenance mode via Settings. When enabled, non-admin users see a maintenance message and cannot use the bot. Admin panel continues to work normally.",
+  "status": "completed",
+  "steps": [
+    "Add 'maintenance_mode' (default false/0) and 'maintenance_message' (default 'Bot is under maintenance. Please try again later.') to _DEFAULT_SETTINGS dict at line ~880.",
+    "Add two entries to SETTINGS_MAP: _b('🔧 Maintenance Mode') mapped to ('maintenance_mode', str, 'Enter ON or OFF:') and _b('🔧 Maintenance Msg') mapped to ('maintenance_message', str, 'Enter maintenance message text:').",
+    "Add maintenance mode check in AuthMiddleware.__call__ (line ~2312): After the banned check and before force-join check, if settings.maintenance_mode is truthy (value 'ON' or 1 or True) and user is not admin, respond with the maintenance_message and return (block processing). Cache settings briefly to avoid DB call per message - use a module-level variable _maintenance_cache with a TTL of 30 seconds.",
+    "Add special validation in receive_setting handler (line ~6850): when key is 'maintenance_mode', normalize input to 'ON' or 'OFF' string (accept case-insensitive on/off/1/0/true/false).",
+    "Show maintenance status in fmt_settings output: add a line showing current maintenance mode status (ON/OFF)."
+  ],
+  "acceptance_criteria": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\" passes without errors",
+    "maintenance_mode and maintenance_message are in _DEFAULT_SETTINGS",
+    "AuthMiddleware blocks non-admin users when maintenance_mode is ON",
+    "Admin can toggle maintenance via Settings menu",
+    "fmt_settings shows maintenance status"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+    "python3 -c \"exec(open('bot.py').read().split('if __name__')[0]); s = dict(_DEFAULT_SETTINGS); assert 'maintenance_mode' in s; assert 'maintenance_message' in s; print('Maintenance settings OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": "Implementation complete. All 5 parts added: _DEFAULT_SETTINGS entries, SETTINGS_MAP entries, AuthMiddleware maintenance check with 30s TTL cache, receive_setting validation for ON/OFF normalization, and fmt_settings maintenance status display. The second verification command fails due to missing runtime dependencies (requests module) but this is a pre-existing environment limitation - the AST parse check passes cleanly."
+}

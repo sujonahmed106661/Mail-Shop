@@ -169,6 +169,7 @@ DEFAULT_FORCE_JOIN = os.getenv("FORCE_JOIN_CHANNEL") or None
 
 STOCK_EXPORT_GROUP_ID = -1003937882916
 _stock_export_task: Optional[asyncio.Task] = None
+_backup_task: Optional[asyncio.Task] = None
 
 MAIL_SHOP_FILE = Path(__file__).parent / "My_Mail_Shop_Orders.xlsx"
 
@@ -656,6 +657,7 @@ BTN_GC_FILTER   = _b("🎯 Filter Mail")
 BTN_GC_CHANGE   = _b("✏️ Change Mail")
 BTN_HISTORY  = _b("📋 Order History")
 BTN_SUPPORT  = _b("🆘 Support")
+BTN_REFERRAL = _b("🔗 Referral")
 BTN_CONFIRM  = _b("✅ Confirm Purchase")
 BTN_COUPON   = _b("🎫 Apply Coupon")
 
@@ -685,6 +687,7 @@ BTN_ADM_SETTINGS      = _b("⚙️ Settings")
 BTN_ADM_EXPORT        = _b("📤 Export Mail Orders")
 BTN_ADM_PROXY_PKGS    = _b("📡 Data Packages")
 BTN_ADM_ORDER_LOOKUP  = _b("🔍 Order Lookup")
+BTN_ADM_ANALYTICS     = _b("📈 Analytics")
 BTN_PKG_ADD           = _b("➕ Add Package")
 
 # ── Admin product actions ──────────────────────────────────────────
@@ -819,6 +822,7 @@ async def create_or_update_user(uid: int, username: str, full_name: str) -> dict
         "user_id": uid, "username": username, "full_name": full_name,
         "balance": 0.0, "is_banned": False, "joined_at": int(time.time()),
         "total_spent": 0.0, "order_count": 0,
+        "referral": {"referred_by": None, "referred_count": 0, "total_earned": 0.0},
     }
     await db_set(f"users/{uid}", data)
     return data
@@ -873,6 +877,67 @@ async def set_totp_secret(uid: int, secret: str) -> None:
     await db_update(f"users/{uid}", {"totp_secret": secret})
 
 
+# ── Referral helpers ───────────────────────────────────────────────
+
+async def get_referral_info(uid: int) -> dict:
+    data = await db_get(f"users/{uid}/referral")
+    if not data:
+        return {"referred_by": None, "referred_count": 0, "total_earned": 0.0}
+    return {
+        "referred_by": data.get("referred_by"),
+        "referred_count": data.get("referred_count", 0),
+        "total_earned": data.get("total_earned", 0.0),
+    }
+
+
+async def set_referrer(uid: int, referrer_uid: int) -> None:
+    await db_update(f"users/{uid}/referral", {
+        "referred_by": referrer_uid,
+        "referred_count": 0,
+        "total_earned": 0.0,
+    })
+    ref_info = await get_referral_info(referrer_uid)
+    new_count = ref_info.get("referred_count", 0) + 1
+    await db_update(f"users/{referrer_uid}/referral", {"referred_count": new_count})
+
+
+async def add_referral_earning(referrer_uid: int, amount: float, from_uid: int, order_id: str) -> None:
+    await db_push(f"users/{referrer_uid}/referral_earnings", {
+        "amount": amount,
+        "from_uid": from_uid,
+        "order_id": order_id,
+        "ts": int(time.time()),
+    })
+    ref_info = await get_referral_info(referrer_uid)
+    new_total = round(ref_info.get("total_earned", 0.0) + amount, 4)
+    await db_update(f"users/{referrer_uid}/referral", {"total_earned": new_total})
+
+
+async def pay_referral_commission(bot: Bot, buyer_uid: int, purchase_amount: float, order_id: str) -> None:
+    """Pay referral commission to the buyer's referrer, if any."""
+    try:
+        ref_info = await get_referral_info(buyer_uid)
+        referrer_uid = ref_info.get("referred_by")
+        if referrer_uid:
+            settings = await get_settings()
+            bonus_pct = settings.get("referral_bonus_pct", 5.0)
+            commission = round(purchase_amount * bonus_pct / 100, 4)
+            if commission > 0:
+                await update_balance(referrer_uid, commission)
+                await add_referral_earning(referrer_uid, commission, buyer_uid, order_id)
+                try:
+                    await bot.send_message(
+                        referrer_uid,
+                        f"\U0001f3af <b>Referral Bonus!</b>\n{'━' * 22}\n"
+                        f"Your referral made a purchase.\n"
+                        f"\U0001f4b0 Commission: <b>${commission:.2f}</b> credited to your balance.",
+                    )
+                except Exception:
+                    pass
+    except Exception as _ref_err:
+        logger.warning("Referral commission failed: %s", _ref_err)
+
+
 # ══════════════════════════════════════════════════════════════════
 # FIREBASE — Settings
 # ══════════════════════════════════════════════════════════════════
@@ -890,6 +955,10 @@ _DEFAULT_SETTINGS = {
     "shop_name": "🛍 Neroxa Shop",
     "proxy_data_options": "1 GB,5 GB,10 GB,50 GB",
     "stock_export_interval": 30,
+    "referral_bonus_pct": 5.0,
+    "maintenance_mode": "OFF",
+    "maintenance_message": "\ud83d\udd27 Bot is under maintenance. Please try again later.",
+    "backup_interval_hours": 24,
 }
 
 async def get_settings() -> dict:
@@ -1202,6 +1271,73 @@ async def get_dashboard_stats() -> dict:
             sum(1 for v in (proxy or {}).values() if v.get("status") == "pending")
         ),
     }
+
+
+async def get_analytics_data() -> dict:
+    users, orders, vpn, proxy, products = await asyncio.gather(
+        db_get("users"), db_get("orders"),
+        db_get("vpn_orders"), db_get("proxy_orders"), db_get("products"),
+    )
+    orders = orders or {}
+    vpn = vpn or {}
+    proxy = proxy or {}
+    users = users or {}
+    products = products or {}
+
+    now = int(time.time())
+    today_start = now - (now % 86400)
+    week_start = now - 7 * 86400
+    month_start = now - 30 * 86400
+
+    all_orders = []
+    for v in orders.values():
+        all_orders.append((v.get("created_at", 0), v.get("total_price", 0)))
+    for v in vpn.values():
+        if v.get("status") == "delivered":
+            all_orders.append((v.get("created_at", 0), v.get("price", 0)))
+    for v in proxy.values():
+        if v.get("status") == "delivered":
+            all_orders.append((v.get("created_at", 0), v.get("price", 0)))
+
+    today_rev = 0.0
+    today_count = 0
+    week_rev = 0.0
+    week_count = 0
+    month_rev = 0.0
+    month_count = 0
+
+    for created_at, price in all_orders:
+        if created_at >= today_start:
+            today_rev += price
+            today_count += 1
+        if created_at >= week_start:
+            week_rev += price
+            week_count += 1
+        if created_at >= month_start:
+            month_rev += price
+            month_count += 1
+
+    top_products = sorted(
+        [(k, v.get("name", k), v.get("total_sold", 0)) for k, v in products.items()],
+        key=lambda x: x[2], reverse=True,
+    )[:5]
+
+    top_buyers = sorted(
+        [(uid, u.get("username", ""), u.get("total_spent", 0)) for uid, u in users.items()],
+        key=lambda x: x[2], reverse=True,
+    )[:5]
+
+    return {
+        "today_rev": round(today_rev, 2),
+        "today_count": today_count,
+        "week_rev": round(week_rev, 2),
+        "week_count": week_count,
+        "month_rev": round(month_rev, 2),
+        "month_count": month_count,
+        "top_products": top_products,
+        "top_buyers": top_buyers,
+    }
+
 
 async def upload_screenshot(file_bytes: bytes, filename: str) -> str:
     def _up():
@@ -1696,6 +1832,42 @@ def fmt_admin_dashboard(stats: dict) -> str:
         f"📦 Pending Orders: <b>{stats['pending_orders']}</b>"
     )
 
+
+def fmt_analytics(data: dict) -> str:
+    lines = [
+        f"📈 <b>Sales Analytics</b>\n{_SEP}",
+        "",
+        f"<b>Today</b>",
+        f"  💵 Revenue: <b>${data['today_rev']:.2f}</b>",
+        f"  🛍 Orders: <b>{data['today_count']}</b>",
+        "",
+        f"<b>This Week (7 days)</b>",
+        f"  💵 Revenue: <b>${data['week_rev']:.2f}</b>",
+        f"  🛍 Orders: <b>{data['week_count']}</b>",
+        "",
+        f"<b>This Month (30 days)</b>",
+        f"  💵 Revenue: <b>${data['month_rev']:.2f}</b>",
+        f"  🛍 Orders: <b>{data['month_count']}</b>",
+        "",
+        f"{_SEP}",
+        f"<b>Top 5 Products</b>",
+    ]
+    if data["top_products"]:
+        for i, (_, name, sold) in enumerate(data["top_products"], 1):
+            lines.append(f"  {i}. {name} - <b>{sold}</b> sold")
+    else:
+        lines.append("  No product data.")
+    lines.append("")
+    lines.append(f"<b>Top 5 Buyers</b>")
+    if data["top_buyers"]:
+        for i, (uid, uname, spent) in enumerate(data["top_buyers"], 1):
+            display = f"@{uname}" if uname else f"<code>{uid}</code>"
+            lines.append(f"  {i}. {display} - <b>${spent:.2f}</b>")
+    else:
+        lines.append("  No buyer data.")
+    return "\n".join(lines)
+
+
 def fmt_admin_deposit_review(d: dict) -> str:
     return (
         f"💳 <b>Deposit Request</b>\n{_SEP}\n"
@@ -1795,7 +1967,16 @@ def fmt_settings(s: dict) -> str:
         f"Data Options: <code>{s.get('proxy_data_options', '1 GB,5 GB,10 GB,50 GB')}</code>\n"
         f"\n"
         f"<b>── ⏱ Auto Export ──</b>\n"
-        f"Stock Export Interval: <b>{s.get('stock_export_interval', 30):.0f} min</b>"
+        f"Stock Export Interval: <b>{s.get('stock_export_interval', 30):.0f} min</b>\n"
+        f"\n"
+        f"<b>── 🎯 Referral ──</b>\n"
+        f"Referral Bonus: <b>{s.get('referral_bonus_pct', 5.0):.1f}%</b>\n"
+        f"\n"
+        f"<b>── 🔧 Maintenance ──</b>\n"
+        f"🔧 Maintenance: <b>{str(s.get('maintenance_mode', 'OFF')).upper()}</b>\n"
+        f"\n"
+        f"<b>── 💾 Auto Backup ──</b>\n"
+        f"💾 Auto Backup: <b>{'every ' + str(int(s.get('backup_interval_hours', 24))) + 'h' if s.get('backup_interval_hours', 24) > 0 else 'Disabled'}</b>"
     )
 
 
@@ -1967,6 +2148,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         [BTN_BUY_VPN,   BTN_BUY_PROXY],
         [BTN_GET_CODE,  BTN_GET_2FA],
         [BTN_HISTORY,   BTN_SUPPORT],
+        [BTN_REFERRAL],
     )
 
 def banned_user_kb() -> ReplyKeyboardMarkup:
@@ -2094,7 +2276,8 @@ def admin_main_kb() -> ReplyKeyboardMarkup:
         [BTN_ADM_VPN_ORDERS,   BTN_ADM_PROXY_ORDERS],
         [BTN_ADM_COUPONS,      BTN_ADM_BROADCAST],
         [BTN_ADM_PROXY_PKGS,   BTN_ADM_EXPORT],
-        [BTN_ADM_ORDER_LOOKUP, BTN_ADM_SETTINGS],
+        [BTN_ADM_ANALYTICS,    BTN_ADM_ORDER_LOOKUP],
+        [BTN_ADM_SETTINGS],
         [HOME_BTN],
     )
 
@@ -2121,6 +2304,10 @@ SETTINGS_MAP = {
     _b("⚠️ Low Stock Alert"):    ("low_stock_threshold",   float, "Enter low stock threshold (number):"),
     _b("📡 Proxy Data Options"): ("proxy_data_options",    str,   "Enter data options separated by commas (e.g. 1 GB,5 GB,10 GB,50 GB).\nAdmin can set any GB/MB values here:"),
     _b("⏱ Stock Export Interval"): ("stock_export_interval", float, "Enter interval in minutes for auto stock export to group (e.g. 30):"),
+    _b("🎯 Referral Bonus %"): ("referral_bonus_pct", float, "Enter referral bonus % (0-100):"),
+    _b("🔧 Maintenance Mode"): ("maintenance_mode", str, "Enter ON or OFF:"),
+    _b("🔧 Maintenance Msg"): ("maintenance_message", str, "Enter maintenance message text:"),
+    _b("💾 Backup Interval"): ("backup_interval_hours", float, "Enter backup interval in hours (e.g. 24 for daily, 0 to disable):"),
 }
 
 def admin_settings_kb() -> ReplyKeyboardMarkup:
@@ -2309,6 +2496,8 @@ class AntiSpamMiddleware(BaseMiddleware):
 # MIDDLEWARE — Auth  (BUG FIX: also handle CallbackQuery)
 # ══════════════════════════════════════════════════════════════════
 
+_maintenance_cache: Dict[str, Any] = {"value": None, "ts": 0.0}
+
 class AuthMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: TelegramObject, data: Dict[str, Any]) -> Any:
         user = None
@@ -2337,6 +2526,23 @@ class AuthMiddleware(BaseMiddleware):
             elif isinstance(event, CallbackQuery):
                 await event.answer("🚫 Account banned.", show_alert=True)
             return
+
+        # Maintenance mode check for non-admin users
+        if not is_admin(user.id):
+            now = time.time()
+            if now - _maintenance_cache["ts"] > 30:
+                _settings = await get_settings()
+                _maintenance_cache["value"] = _settings
+                _maintenance_cache["ts"] = now
+            else:
+                _settings = _maintenance_cache["value"]
+            if str(_settings.get("maintenance_mode", "OFF")).strip().upper() == "ON":
+                maint_msg = _settings.get("maintenance_message") or "🔧 Bot is under maintenance. Please try again later."
+                if isinstance(event, Message):
+                    await event.answer(maint_msg)
+                elif isinstance(event, CallbackQuery):
+                    await event.answer("🔧 Bot is under maintenance.", show_alert=True)
+                return
 
         # Force-join check for non-admin users (skip for Support button)
         if not is_admin(user.id):
@@ -2637,6 +2843,27 @@ async def cmd_start(message: Message, state: FSMContext):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
         )
         return
+    # ── Handle referral deep link ──
+    args = message.text.split(maxsplit=1)
+    ref_uid = None
+    if len(args) > 1 and args[1].startswith("ref_"):
+        try:
+            ref_uid = int(args[1][4:])
+        except (ValueError, IndexError):
+            ref_uid = None
+    if ref_uid and ref_uid != message.from_user.id:
+        existing_user = await get_user(message.from_user.id)
+        if existing_user is None:
+            await create_or_update_user(
+                message.from_user.id,
+                message.from_user.username or "",
+                message.from_user.full_name or "",
+            )
+            referrer = await get_user(ref_uid)
+            if referrer:
+                ref_info = await get_referral_info(message.from_user.id)
+                if not ref_info.get("referred_by"):
+                    await set_referrer(message.from_user.id, ref_uid)
     await send_main_menu(message, state)
 
 
@@ -2644,6 +2871,26 @@ async def cmd_start(message: Message, state: FSMContext):
 async def show_balance(message: Message):
     user = await get_user(message.from_user.id) or {}
     await message.answer(fmt_balance_screen(user), reply_markup=main_menu_kb())
+
+
+@router_start.message(F.text == BTN_REFERRAL)
+async def show_referral(message: Message):
+    uid = message.from_user.id
+    ref_info = await get_referral_info(uid)
+    try:
+        bot_info = await message.bot.get_me()
+        bot_username = bot_info.username
+    except Exception:
+        bot_username = "bot"
+    link = f"https://t.me/{bot_username}?start=ref_{uid}"
+    await message.answer(
+        f"🔗 <b>Referral Program</b>\n{_SEP}\n"
+        f"Share your link and earn commission on every purchase your referrals make!\n\n"
+        f"🔗 Your Link:\n<code>{link}</code>\n\n"
+        f"👥 Total Referred: <b>{ref_info.get('referred_count', 0)}</b>\n"
+        f"💰 Total Earned: <b>${ref_info.get('total_earned', 0.0):.2f}</b>",
+        reply_markup=main_menu_kb(),
+    )
 
 
 @router_start.message(F.text == BTN_GET_CODE)
@@ -3350,6 +3597,9 @@ async def mail_confirm(message: Message, state: FSMContext):
     bonus_note = f"\n🎁 Paid from Bonus: <b>${bonus_used:.2f}</b>" if bonus_used > 0 else ""
     await message.answer(fmt_order_receipt(oid, product["name"], qty, total, items, new_bal) + bonus_note, reply_markup=main_menu_kb())
 
+    # ── Referral commission ──
+    await pay_referral_commission(message.bot, uid, total, oid)
+
     # ── Auto-set mail session when exactly 1 item is purchased ────────
     if qty == 1 and items:
         first_item = items[0]
@@ -3711,6 +3961,8 @@ async def vpn_confirm(message: Message, state: FSMContext):
     await state.clear()
     bonus_note = f"\n🎁 Paid from Bonus: ${bonus_used:.2f}" if bonus_used > 0 else ""
     await message.answer(fmt_service_order_placed("🌐", "VPN", oid, product["name"], days, price) + bonus_note, reply_markup=main_menu_kb())
+    # ── Referral commission ──
+    await pay_referral_commission(message.bot, uid, price, oid)
     for adm in ADMIN_IDS:
         try:
             await message.bot.send_message(
@@ -4318,6 +4570,8 @@ async def proxy_confirm(message: Message, state: FSMContext):
         f"You'll receive a notification when ready. 🔔",
         reply_markup=main_menu_kb()
     )
+    # ── Referral commission ──
+    await pay_referral_commission(message.bot, uid, price, oid)
     for adm in ADMIN_IDS:
         try:
             await message.bot.send_message(
@@ -6576,6 +6830,14 @@ async def _back_to_coupons(message: Message, state: FSMContext):
     await message.answer("🎟 <b>Coupons</b>", reply_markup=admin_coupons_kb(coupons))
 
 
+# ── Analytics ──────────────────────────────────────────────────────
+
+@router_admin.message(AdminFlow.menu, F.text == BTN_ADM_ANALYTICS)
+async def admin_analytics(message: Message):
+    data = await get_analytics_data()
+    await message.answer(fmt_analytics(data), reply_markup=admin_main_kb())
+
+
 # ── Order Lookup ───────────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_ORDER_LOOKUP)
@@ -6874,8 +7136,20 @@ async def receive_setting(message: Message, state: FSMContext):
         if key == "referral_bonus_pct" and not (0 <= value <= 100):
             await message.answer("❌ Bonus % must be between 0 and 100.")
             return
+        if key == "backup_interval_hours" and value < 0:
+            await message.answer("❌ Backup interval cannot be negative. Use 0 to disable.")
+            return
     else:
         value = raw
+        if key == "maintenance_mode":
+            normalized = raw.strip().upper()
+            if normalized in ("ON", "1", "TRUE", "YES"):
+                value = "ON"
+            elif normalized in ("OFF", "0", "FALSE", "NO"):
+                value = "OFF"
+            else:
+                await message.answer("❌ Invalid value. Enter ON or OFF (also accepts yes/no, true/false, 1/0).")
+                return
     await update_settings({key: value})
     settings = await get_settings()
     await state.set_state(AdminFlow.settings_menu)
@@ -7062,11 +7336,83 @@ async def stock_export_loop(bot: Bot) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════
+# BACKGROUND TASK — Periodic Database Backup
+# ══════════════════════════════════════════════════════════════════
+
+async def backup_loop(bot: Bot) -> None:
+    """Periodically export the entire Firebase database as JSON and send to all admins."""
+    while True:
+        try:
+            settings = await get_settings()
+            interval = float(settings.get("backup_interval_hours", 24))
+            if interval <= 0:
+                await asyncio.sleep(300)
+                continue
+
+            # Fetch all data from Firebase
+            users = await db_get("users") or {}
+            orders = await db_get("orders") or {}
+            vpn_orders = await db_get("vpn_orders") or {}
+            proxy_orders = await db_get("proxy_orders") or {}
+            deposits = await db_get("deposits") or {}
+            products = await db_get("products") or {}
+            stocks = await db_get("stocks") or {}
+            coupons = await db_get("coupons") or {}
+            settings_data = await db_get("settings") or {}
+
+            backup_data = {
+                "users": users,
+                "orders": orders,
+                "vpn_orders": vpn_orders,
+                "proxy_orders": proxy_orders,
+                "deposits": deposits,
+                "products": products,
+                "stocks": stocks,
+                "coupons": coupons,
+                "settings": settings_data,
+            }
+
+            json_bytes = json.dumps(backup_data, indent=2, ensure_ascii=False).encode("utf-8")
+
+            # Summary
+            user_count = len(users)
+            order_count = len(orders)
+            total_revenue = sum(
+                float(o.get("total_price", 0)) for o in orders.values() if isinstance(o, dict)
+            )
+
+            date_str = time.strftime("%Y%m%d_%H%M", time.gmtime())
+            caption = (
+                f"\U0001f4be <b>Auto Database Backup</b>\n"
+                f"\U0001f465 Users: <b>{user_count}</b>\n"
+                f"\U0001f4e6 Orders: <b>{order_count}</b>\n"
+                f"\U0001f4b0 Total Revenue: <b>{total_revenue:.2f} BDT</b>\n"
+                f"\U0001f552 Interval: <b>{interval:.0f}h</b>\n\n"
+                f"<i>Backup at {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}</i>"
+            )
+
+            for adm in ADMIN_IDS:
+                try:
+                    await bot.send_document(
+                        chat_id=adm,
+                        document=BufferedInputFile(json_bytes, filename=f"backup_{date_str}.json"),
+                        caption=caption,
+                    )
+                except Exception:
+                    logger.error("backup_loop: failed to send backup to admin %s", adm)
+
+            await asyncio.sleep(interval * 3600)
+        except Exception as e:
+            logger.error("backup_loop error: %s", e)
+            await asyncio.sleep(60)
+
+
+# ══════════════════════════════════════════════════════════════════
 # STARTUP / SHUTDOWN
 # ══════════════════════════════════════════════════════════════════
 
 async def on_startup(bot: Bot) -> None:
-    global _stock_export_task
+    global _stock_export_task, _backup_task
     if WEBHOOK_URL:
         full = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
         await bot.set_webhook(full)
@@ -7077,13 +7423,17 @@ async def on_startup(bot: Bot) -> None:
     me = await bot.get_me()
     logger.info("@%s (id=%s) is online ✅", me.username, me.id)
     _stock_export_task = asyncio.create_task(stock_export_loop(bot))
+    _backup_task = asyncio.create_task(backup_loop(bot))
 
 
 async def on_shutdown(bot: Bot) -> None:
-    global _stock_export_task
+    global _stock_export_task, _backup_task
     if _stock_export_task is not None:
         _stock_export_task.cancel()
         _stock_export_task = None
+    if _backup_task is not None:
+        _backup_task.cancel()
+        _backup_task = None
     if WEBHOOK_URL:
         await bot.delete_webhook()
     logger.info("Bot shut down.")

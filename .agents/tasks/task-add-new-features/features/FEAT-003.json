@@ -1,0 +1,27 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Revenue/Sales Analytics - Admin gets a detailed analytics command showing daily, weekly, and monthly sales breakdown, top products, top buyers, and revenue trends. Accessible via a new button in the admin menu.",
+  "status": "in_progress",
+  "steps": [
+    "Add new button BTN_ADM_ANALYTICS = _b('📈 Analytics') in the admin buttons section around line 690.",
+    "Add BTN_ADM_ANALYTICS to admin_main_kb() layout - place it paired with BTN_ADM_ORDER_LOOKUP on the same row, moving BTN_ADM_SETTINGS to its own row before HOME_BTN.",
+    "Create async def get_analytics_data() function in the Firebase helpers section. It should: (a) fetch all orders, vpn_orders, proxy_orders, (b) compute today's revenue/count, this week's revenue/count, this month's revenue/count using created_at timestamps, (c) find top 5 products by total_sold, (d) find top 5 buyers by total_spent.",
+    "Create def fmt_analytics(data: dict) -> str formatting function that displays: Today (revenue, orders), This Week (revenue, orders), This Month (revenue, orders), Top Products table, Top Buyers table. Use _SEP separator and HTML bold formatting.",
+    "Add handler in router_admin for BTN_ADM_ANALYTICS at AdminFlow.menu state: call get_analytics_data(), format with fmt_analytics(), reply with admin_main_kb().",
+    "Register the handler properly so it responds when admin presses the Analytics button from admin menu."
+  ],
+  "acceptance_criteria": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\" passes without errors",
+    "BTN_ADM_ANALYTICS button exists and is in admin_main_kb()",
+    "get_analytics_data() function computes daily/weekly/monthly breakdowns",
+    "fmt_analytics() produces a well-formatted HTML message",
+    "Admin can press Analytics button from admin menu and see stats"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+    "python3 -c \"import ast; tree = ast.parse(open('bot.py').read()); funcs = [n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]; assert 'get_analytics_data' in funcs; assert 'fmt_analytics' in funcs; print('Analytics functions OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

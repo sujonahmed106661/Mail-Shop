@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "Auto-backup - Periodic background task that exports the entire Firebase database as a JSON file and sends it to all admins at a configurable interval. Admin can configure backup interval via Settings.",
+  "status": "completed",
+  "steps": [
+    "Add 'backup_interval_hours' (default 24) to _DEFAULT_SETTINGS dict at line ~880.",
+    "Add entry to SETTINGS_MAP: _b('💾 Backup Interval') mapped to ('backup_interval_hours', float, 'Enter backup interval in hours (e.g. 24 for daily, 0 to disable):').",
+    "Add 'backup_interval_hours' display line in fmt_settings output.",
+    "Create async def backup_loop(bot: Bot) background task function (similar pattern to stock_export_loop at line ~7019). It should: (a) read backup_interval_hours from settings, (b) if > 0, fetch all Firebase data (users, orders, vpn_orders, proxy_orders, deposits, products, stocks, coupons, settings), (c) serialize to JSON, (d) send as a document (BufferedInputFile) to each admin with caption showing timestamp and data summary (user count, order count, etc.), (e) sleep for interval hours, (f) handle errors gracefully with logger.error.",
+    "Register the backup_loop task in on_startup (line ~7079) alongside _stock_export_task. Add a global _backup_task variable, create the task in on_startup, cancel in on_shutdown.",
+    "Add validation in receive_setting: if key is 'backup_interval_hours' and value < 0, reject."
+  ],
+  "acceptance_criteria": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\" passes without errors",
+    "backup_interval_hours is in _DEFAULT_SETTINGS",
+    "backup_loop function exists and follows the stock_export_loop pattern",
+    "Backup task is started in on_startup and cancelled in on_shutdown",
+    "Admin can configure backup interval via Settings",
+    "fmt_settings shows backup interval"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+    "python3 -c \"import ast; tree = ast.parse(open('bot.py').read()); funcs = [n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]; assert 'backup_loop' in funcs; print('Backup function OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": "All implementation steps completed successfully. backup_loop follows the exact same pattern as stock_export_loop. Syntax validation and function existence check both pass."
+}
