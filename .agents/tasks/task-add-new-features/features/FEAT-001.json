@@ -1,0 +1,30 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Referral System - Users can generate a referral link, invite others, and earn a commission (percentage of referee's purchases) as balance credit. Admin can configure the referral bonus percentage via Settings.",
+  "status": "in_progress",
+  "steps": [
+    "Add 'referral_bonus_pct' to _DEFAULT_SETTINGS (default 5.0) at line ~880 in bot.py. Add 'referral_bonus_pct' entry to SETTINGS_MAP at line ~2107 with prompt 'Enter referral bonus % (0-100):' and type float.",
+    "Add new button BTN_REFERRAL = _b('🔗 Referral') in the user menu buttons section around line 657. Add it to main_menu_kb() as a new row [BTN_REFERRAL] after the [BTN_HISTORY, BTN_SUPPORT] row (before closing paren).",
+    "Add Firebase helper functions: async def get_referral_info(uid) to get users/{uid}/referral data, async def set_referrer(uid, referrer_uid) to save the referrer, async def add_referral_earning(uid, amount, from_uid, order_id) to push to users/{uid}/referral_earnings and increment users/{uid}/referral/total_earned.",
+    "Modify cmd_start (line ~2604) to handle deep link referral: parse message.text for '/start ref_USERID' pattern. If found, and the user is new (not existing in DB), save referrer_uid to the new user's profile via set_referrer(). Skip if self-referral or already has a referrer.",
+    "Add a referral menu handler: when user presses BTN_REFERRAL, show their referral link (https://t.me/{bot_username}?start=ref_{user_id}), total referred count, total earnings. Use a simple message with main_menu_kb() (no sub-state needed).",
+    "Add referral commission logic: After a successful purchase in mail_confirm (line ~3354), vpn_confirm, and proxy_confirm handlers, check if the buyer has a referrer. If yes, calculate commission = total_price * referral_bonus_pct / 100, credit to referrer's balance via update_balance(), record earning via add_referral_earning(), and notify referrer via bot.send_message().",
+    "Add referral info to fmt_settings output (line ~1773): show current referral bonus % in the settings display.",
+    "Update create_or_update_user to initialize referral field: {'referral': {'referred_by': null, 'referred_count': 0, 'total_earned': 0.0}} for new users."
+  ],
+  "acceptance_criteria": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\" passes without errors",
+    "BTN_REFERRAL button appears in main_menu_kb() layout",
+    "cmd_start handles /start ref_USERID deep links and records referrer",
+    "Referral commission is credited after mail/vpn/proxy purchases",
+    "Admin can configure referral_bonus_pct in Settings",
+    "User can view referral link, stats via the Referral button"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+    "python3 -c \"import ast; tree = ast.parse(open('bot.py').read()); funcs = [n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]; assert 'get_referral_info' in funcs; assert 'set_referrer' in funcs; assert 'add_referral_earning' in funcs; print('Referral functions OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
