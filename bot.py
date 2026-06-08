@@ -696,6 +696,11 @@ BTN_ADM_ORDER_LOOKUP  = _b("🔍 Order Lookup")
 BTN_ADM_ANALYTICS     = _b("📈 Analytics")
 BTN_PKG_ADD           = _b("➕ Add Package")
 
+# ── Admin sub-menu buttons ─────────────────────────────────────────
+BTN_ADM_ORDERS_MENU   = _b("📋 Orders")
+BTN_ADM_REPORTS_MENU  = _b("📊 Reports")
+BTN_ADM_TOOLS_MENU    = _b("🔧 Tools")
+
 # ── Admin panel enhancements (FEAT-002) ────────────────────────────
 BTN_ADM_LOW_STOCK     = _b("🚨 Low Stock Alerts")
 BTN_ADM_ROLES         = _b("👑 Admin Roles")
@@ -2486,6 +2491,10 @@ class AdminFlow(StatesGroup):
     profit_calc       = State()
     profit_set_cost   = State()
     activity_logs     = State()
+    # Sub-menu states
+    orders_submenu    = State()
+    reports_submenu   = State()
+    tools_submenu     = State()
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2633,16 +2642,32 @@ def admin_main_kb() -> ReplyKeyboardMarkup:
         [BTN_ADM_DASHBOARD],
         [BTN_ADM_PRODUCTS,     BTN_ADM_STOCK],
         [BTN_ADM_USERS,        BTN_ADM_DEPOSITS],
-        [BTN_ADM_VPN_ORDERS,   BTN_ADM_PROXY_ORDERS],
-        [BTN_ADM_COUPONS,      BTN_ADM_BROADCAST],
-        [BTN_ADM_PROXY_PKGS,   BTN_ADM_EXPORT],
-        [BTN_ADM_ANALYTICS,    BTN_ADM_ORDER_LOOKUP],
-        [BTN_ADM_LOW_STOCK,    BTN_ADM_STATUS_MGR],
-        [BTN_ADM_ROLES,        BTN_ADM_LOGS],
-        [BTN_ADM_EXPORT_TX,    BTN_ADM_PROFIT],
-        [BTN_ADM_PRICE_SYNC,   BTN_ADM_AUTO_IMPORT],
-        [BTN_ADM_SETTINGS],
+        [BTN_ADM_ORDERS_MENU,  BTN_ADM_REPORTS_MENU],
+        [BTN_ADM_TOOLS_MENU,   BTN_ADM_SETTINGS],
         [HOME_BTN],
+    )
+
+def admin_orders_submenu_kb() -> ReplyKeyboardMarkup:
+    return _kb(
+        [BTN_ADM_VPN_ORDERS,   BTN_ADM_PROXY_ORDERS],
+        [BTN_ADM_ORDER_LOOKUP, BTN_ADM_EXPORT],
+        [BACK_BTN, HOME_BTN],
+    )
+
+def admin_reports_submenu_kb() -> ReplyKeyboardMarkup:
+    return _kb(
+        [BTN_ADM_ANALYTICS,    BTN_ADM_PROFIT],
+        [BTN_ADM_EXPORT_TX,    BTN_ADM_LOGS],
+        [BACK_BTN, HOME_BTN],
+    )
+
+def admin_tools_submenu_kb() -> ReplyKeyboardMarkup:
+    return _kb(
+        [BTN_ADM_LOW_STOCK,    BTN_ADM_STATUS_MGR],
+        [BTN_ADM_PRICE_SYNC,   BTN_ADM_AUTO_IMPORT],
+        [BTN_ADM_ROLES,        BTN_ADM_BROADCAST],
+        [BTN_ADM_COUPONS,      BTN_ADM_PROXY_PKGS],
+        [BACK_BTN, HOME_BTN],
     )
 
 def proxy_pkg_manage_kb(options: list) -> ReplyKeyboardMarkup:
@@ -5803,6 +5828,39 @@ async def cmd_admin(message: Message, state: FSMContext):
     await message.answer(f"🔐 <b>Admin Panel</b>\n{_SEP}\nWelcome back, admin!", reply_markup=admin_main_kb())
 
 
+# ── Sub-menu navigation ────────────────────────────────────────────
+
+@router_admin.message(AdminFlow.menu, F.text == BTN_ADM_ORDERS_MENU)
+async def admin_orders_submenu(message: Message, state: FSMContext):
+    await state.set_state(AdminFlow.orders_submenu)
+    await message.answer("📋 <b>Orders Management</b>", reply_markup=admin_orders_submenu_kb())
+
+@router_admin.message(AdminFlow.menu, F.text == BTN_ADM_REPORTS_MENU)
+async def admin_reports_submenu(message: Message, state: FSMContext):
+    await state.set_state(AdminFlow.reports_submenu)
+    await message.answer("📊 <b>Reports & Analytics</b>", reply_markup=admin_reports_submenu_kb())
+
+@router_admin.message(AdminFlow.menu, F.text == BTN_ADM_TOOLS_MENU)
+async def admin_tools_submenu(message: Message, state: FSMContext):
+    await state.set_state(AdminFlow.tools_submenu)
+    await message.answer("🔧 <b>Tools & Automation</b>", reply_markup=admin_tools_submenu_kb())
+
+@router_admin.message(AdminFlow.orders_submenu, F.text == BACK_BTN)
+async def admin_orders_back(message: Message, state: FSMContext):
+    await state.set_state(AdminFlow.menu)
+    await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+
+@router_admin.message(AdminFlow.reports_submenu, F.text == BACK_BTN)
+async def admin_reports_back(message: Message, state: FSMContext):
+    await state.set_state(AdminFlow.menu)
+    await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+
+@router_admin.message(AdminFlow.tools_submenu, F.text == BACK_BTN)
+async def admin_tools_back(message: Message, state: FSMContext):
+    await state.set_state(AdminFlow.menu)
+    await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
+
+
 # ── Dashboard ──────────────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_DASHBOARD)
@@ -5958,6 +6016,7 @@ async def admin_deposits(message: Message):
 # ── VPN order callbacks ────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_VPN_ORDERS)
+@router_admin.message(AdminFlow.orders_submenu, F.text == BTN_ADM_VPN_ORDERS)
 async def admin_vpn_orders(message: Message):
     pending = await get_pending_vpn_orders()
     if not pending:
@@ -6023,6 +6082,7 @@ async def cancel_vpn(call: CallbackQuery):
 # ── Proxy order callbacks ──────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_PROXY_ORDERS)
+@router_admin.message(AdminFlow.orders_submenu, F.text == BTN_ADM_PROXY_ORDERS)
 async def admin_proxy_orders(message: Message):
     pending = await get_pending_proxy_orders()
     if not pending:
@@ -7488,6 +7548,7 @@ async def admin_bonustop_done(call: CallbackQuery, state: FSMContext):
 # ── Coupons ────────────────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_COUPONS)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_COUPONS)
 async def admin_coupons(message: Message, state: FSMContext):
     coupons = await get_all_coupons()
     dm = build_coupons_dm(coupons)
@@ -7625,6 +7686,7 @@ async def _back_to_coupons(message: Message, state: FSMContext):
 # ── Analytics ──────────────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_ANALYTICS)
+@router_admin.message(AdminFlow.reports_submenu, F.text == BTN_ADM_ANALYTICS)
 async def admin_analytics(message: Message):
     data = await get_analytics_data()
     detail_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -7636,6 +7698,7 @@ async def admin_analytics(message: Message):
 # ── Order Lookup ───────────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_ORDER_LOOKUP)
+@router_admin.message(AdminFlow.orders_submenu, F.text == BTN_ADM_ORDER_LOOKUP)
 async def admin_order_lookup_start(message: Message, state: FSMContext):
     await state.set_state(AdminFlow.order_lookup)
     await message.answer(
@@ -7798,6 +7861,7 @@ async def admin_order_lookup_search(message: Message, state: FSMContext):
 # ── Export Mail Orders ─────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_EXPORT)
+@router_admin.message(AdminFlow.orders_submenu, F.text == BTN_ADM_EXPORT)
 async def admin_export_orders(message: Message):
     _init_mail_shop_file()
 
@@ -7831,6 +7895,7 @@ async def admin_export_orders(message: Message):
 # ── Broadcast ──────────────────────────────────────────────────────
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_BROADCAST)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_BROADCAST)
 async def admin_broadcast_start(message: Message, state: FSMContext):
     await state.set_state(AdminFlow.broadcast)
     await message.answer(
@@ -7969,6 +8034,7 @@ def _pkg_summary(options: list) -> str:
     return lines
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_PROXY_PKGS)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_PROXY_PKGS)
 async def admin_proxy_pkgs(message: Message, state: FSMContext):
     settings = await get_settings()
     opts = _pkg_options(settings)
@@ -8172,6 +8238,7 @@ async def admin_analytics_detail_cb(call: CallbackQuery):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_LOW_STOCK)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_LOW_STOCK)
 async def admin_low_stock_alerts(message: Message):
     if not is_admin(message.from_user.id):
         return
@@ -8233,6 +8300,7 @@ async def admin_restock_cb(call: CallbackQuery, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_PRICE_SYNC)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_PRICE_SYNC)
 async def admin_price_sync(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -8296,6 +8364,7 @@ async def admin_price_sync_input(message: Message, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_AUTO_IMPORT)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_AUTO_IMPORT)
 async def admin_auto_import(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -8388,6 +8457,7 @@ async def admin_auto_import_input(message: Message, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_ROLES)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_ROLES)
 async def admin_roles_menu(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -8593,6 +8663,7 @@ async def admin_user_info_cb(call: CallbackQuery):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_EXPORT_TX)
+@router_admin.message(AdminFlow.reports_submenu, F.text == BTN_ADM_EXPORT_TX)
 async def admin_export_transactions(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -8752,6 +8823,7 @@ async def admin_export_tx_input(message: Message, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_STATUS_MGR)
+@router_admin.message(AdminFlow.tools_submenu, F.text == BTN_ADM_STATUS_MGR)
 async def admin_service_status(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -8868,6 +8940,7 @@ async def admin_bulk_offline_cb(call: CallbackQuery):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_PROFIT)
+@router_admin.message(AdminFlow.reports_submenu, F.text == BTN_ADM_PROFIT)
 async def admin_profit_calc(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
@@ -8971,6 +9044,7 @@ async def admin_profit_set_cost(message: Message, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════
 
 @router_admin.message(AdminFlow.menu, F.text == BTN_ADM_LOGS)
+@router_admin.message(AdminFlow.reports_submenu, F.text == BTN_ADM_LOGS)
 async def admin_activity_logs(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
