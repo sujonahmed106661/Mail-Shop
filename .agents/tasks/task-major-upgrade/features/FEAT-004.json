@@ -1,0 +1,34 @@
+{
+  "id": "FEAT-004",
+  "type": "chore",
+  "description": "Integration, Final Wiring, and Verification - Wire all new features together, ensure restock notifications fire from stock-add operations, activity logs are called from admin actions, update build_dp() to include any new routers, and perform final syntax/import verification.",
+  "status": "completed",
+  "steps": [
+    "1. Ensure build_dp() includes all routers in correct priority order. If any new routers were created in FEAT-001/002/003, add them.",
+    "2. Wire restock notifications into add_stock_items(): After stock is added, check restock_subs/{pid} and send notifications to subscribed users, then clear their subscriptions.",
+    "3. Wire activity logging into existing admin actions: In approve_deposit/reject_deposit handlers, ban_user handler, add_stock handler, create_product handler - add calls to log_admin_activity().",
+    "4. Wire low stock alert into purchase flow: After pop_stock_items() in the mail purchase handler, check if remaining stock is below threshold and alert admins.",
+    "5. Ensure VIP tier is recalculated after each purchase (in create_order and create_vpn_order and create_proxy_order).",
+    "6. Wire the trending calculation to use existing order timestamps - no additional data storage needed.",
+    "7. Ensure all new inline callback handlers have proper error handling (try/except around call.answer and call.message operations).",
+    "8. Review that all new FSM states have proper BACK_BTN/HOME_BTN handling to avoid users getting stuck.",
+    "9. Final syntax check: python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+    "10. Verify all button text constants use _b() helper and are defined at module level."
+  ],
+  "acceptance_criteria": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\" passes without errors",
+    "build_dp() function includes all routers",
+    "Restock notification code exists in the add_stock_items flow",
+    "Activity log calls exist in at least: deposit approve, deposit reject, ban user, add stock",
+    "Low stock alert triggers after purchase when stock drops below threshold",
+    "All new states have back/home navigation handling",
+    "No duplicate callback_data strings across the entire file"
+  ],
+  "verification": [
+    "Run: cd /projects/sandbox/Mail-Shop && python3 -c \"import ast; ast.parse(open('bot.py').read()); print('SYNTAX OK')\"",
+    "Run: cd /projects/sandbox/Mail-Shop && grep -c 'callback_data=' bot.py to verify inline callbacks exist",
+    "Run: cd /projects/sandbox/Mail-Shop && python3 -c \"import ast; tree = ast.parse(open('bot.py').read()); funcs = [n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]; print(f'{len(funcs)} functions defined')\""
+  ],
+  "blocked_reason": null,
+  "findings": "All integration points were already largely in place from FEAT-001/002/003. Key changes: (1) Rewrote pay_referral_commission docstring and added referral_costs Firebase log to clearly track that commission comes from shop revenue not extra money - shop owner can now audit all referral costs and set referral_bonus_pct to 0 to disable. (2) Added missing pay_referral_commission call in proxy auto purchase handler. (3) Added try/except to track_order_cb edit_text. All routers verified in build_dp. No duplicate callback_data conflicts found. All FSM states have BACK/HOME handling."
+}
