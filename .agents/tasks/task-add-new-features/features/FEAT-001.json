@@ -2,7 +2,7 @@
   "id": "FEAT-001",
   "type": "feat",
   "description": "Referral System - Users can generate a referral link, invite others, and earn a commission (percentage of referee's purchases) as balance credit. Admin can configure the referral bonus percentage via Settings.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Add 'referral_bonus_pct' to _DEFAULT_SETTINGS (default 5.0) at line ~880 in bot.py. Add 'referral_bonus_pct' entry to SETTINGS_MAP at line ~2107 with prompt 'Enter referral bonus % (0-100):' and type float.",
     "Add new button BTN_REFERRAL = _b('🔗 Referral') in the user menu buttons section around line 657. Add it to main_menu_kb() as a new row [BTN_REFERRAL] after the [BTN_HISTORY, BTN_SUPPORT] row (before closing paren).",
@@ -26,5 +26,5 @@
     "python3 -c \"import ast; tree = ast.parse(open('bot.py').read()); funcs = [n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]; assert 'get_referral_info' in funcs; assert 'set_referrer' in funcs; assert 'add_referral_earning' in funcs; print('Referral functions OK')\""
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All referral system components implemented successfully. AST parse and function verification both pass. Added referral_bonus_pct to settings, BTN_REFERRAL to main menu, Firebase helpers (get_referral_info, set_referrer, add_referral_earning), deep link handling in cmd_start, referral menu handler, commission logic in mail/vpn/proxy confirm handlers, referral info in fmt_settings, and referral initialization in create_or_update_user."
 }
