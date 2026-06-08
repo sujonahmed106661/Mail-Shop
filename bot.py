@@ -169,6 +169,7 @@ DEFAULT_FORCE_JOIN = os.getenv("FORCE_JOIN_CHANNEL") or None
 
 STOCK_EXPORT_GROUP_ID = -1003937882916
 _stock_export_task: Optional[asyncio.Task] = None
+_backup_task: Optional[asyncio.Task] = None
 
 MAIL_SHOP_FILE = Path(__file__).parent / "My_Mail_Shop_Orders.xlsx"
 
@@ -932,6 +933,7 @@ _DEFAULT_SETTINGS = {
     "referral_bonus_pct": 5.0,
     "maintenance_mode": "OFF",
     "maintenance_message": "\ud83d\udd27 Bot is under maintenance. Please try again later.",
+    "backup_interval_hours": 24,
 }
 
 async def get_settings() -> dict:
@@ -1946,7 +1948,10 @@ def fmt_settings(s: dict) -> str:
         f"Referral Bonus: <b>{s.get('referral_bonus_pct', 5.0):.1f}%</b>\n"
         f"\n"
         f"<b>── 🔧 Maintenance ──</b>\n"
-        f"🔧 Maintenance: <b>{str(s.get('maintenance_mode', 'OFF')).upper()}</b>"
+        f"🔧 Maintenance: <b>{str(s.get('maintenance_mode', 'OFF')).upper()}</b>\n"
+        f"\n"
+        f"<b>── 💾 Auto Backup ──</b>\n"
+        f"💾 Auto Backup: <b>{'every ' + str(int(s.get('backup_interval_hours', 24))) + 'h' if s.get('backup_interval_hours', 24) > 0 else 'Disabled'}</b>"
     )
 
 
@@ -2277,6 +2282,7 @@ SETTINGS_MAP = {
     _b("🎯 Referral Bonus %"): ("referral_bonus_pct", float, "Enter referral bonus % (0-100):"),
     _b("🔧 Maintenance Mode"): ("maintenance_mode", str, "Enter ON or OFF:"),
     _b("🔧 Maintenance Msg"): ("maintenance_message", str, "Enter maintenance message text:"),
+    _b("💾 Backup Interval"): ("backup_interval_hours", float, "Enter backup interval in hours (e.g. 24 for daily, 0 to disable):"),
 }
 
 def admin_settings_kb() -> ReplyKeyboardMarkup:
@@ -7171,6 +7177,9 @@ async def receive_setting(message: Message, state: FSMContext):
         if key == "referral_bonus_pct" and not (0 <= value <= 100):
             await message.answer("❌ Bonus % must be between 0 and 100.")
             return
+        if key == "backup_interval_hours" and value < 0:
+            await message.answer("❌ Backup interval cannot be negative. Use 0 to disable.")
+            return
     else:
         value = raw
         if key == "maintenance_mode":
@@ -7368,11 +7377,83 @@ async def stock_export_loop(bot: Bot) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════
+# BACKGROUND TASK — Periodic Database Backup
+# ══════════════════════════════════════════════════════════════════
+
+async def backup_loop(bot: Bot) -> None:
+    """Periodically export the entire Firebase database as JSON and send to all admins."""
+    while True:
+        try:
+            settings = await get_settings()
+            interval = float(settings.get("backup_interval_hours", 24))
+            if interval <= 0:
+                await asyncio.sleep(300)
+                continue
+
+            # Fetch all data from Firebase
+            users = await db_get("users") or {}
+            orders = await db_get("orders") or {}
+            vpn_orders = await db_get("vpn_orders") or {}
+            proxy_orders = await db_get("proxy_orders") or {}
+            deposits = await db_get("deposits") or {}
+            products = await db_get("products") or {}
+            stocks = await db_get("stocks") or {}
+            coupons = await db_get("coupons") or {}
+            settings_data = await db_get("settings") or {}
+
+            backup_data = {
+                "users": users,
+                "orders": orders,
+                "vpn_orders": vpn_orders,
+                "proxy_orders": proxy_orders,
+                "deposits": deposits,
+                "products": products,
+                "stocks": stocks,
+                "coupons": coupons,
+                "settings": settings_data,
+            }
+
+            json_bytes = json.dumps(backup_data, indent=2, ensure_ascii=False).encode("utf-8")
+
+            # Summary
+            user_count = len(users)
+            order_count = len(orders)
+            total_revenue = sum(
+                float(o.get("total", 0)) for o in orders.values() if isinstance(o, dict)
+            )
+
+            date_str = time.strftime("%Y%m%d_%H%M", time.gmtime())
+            caption = (
+                f"\U0001f4be <b>Auto Database Backup</b>\n"
+                f"\U0001f465 Users: <b>{user_count}</b>\n"
+                f"\U0001f4e6 Orders: <b>{order_count}</b>\n"
+                f"\U0001f4b0 Total Revenue: <b>{total_revenue:.2f} BDT</b>\n"
+                f"\U0001f552 Interval: <b>{interval:.0f}h</b>\n\n"
+                f"<i>Backup at {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}</i>"
+            )
+
+            for adm in ADMIN_IDS:
+                try:
+                    await bot.send_document(
+                        chat_id=adm,
+                        document=BufferedInputFile(json_bytes, filename=f"backup_{date_str}.json"),
+                        caption=caption,
+                    )
+                except Exception:
+                    logger.error("backup_loop: failed to send backup to admin %s", adm)
+
+            await asyncio.sleep(interval * 3600)
+        except Exception as e:
+            logger.error("backup_loop error: %s", e)
+            await asyncio.sleep(60)
+
+
+# ══════════════════════════════════════════════════════════════════
 # STARTUP / SHUTDOWN
 # ══════════════════════════════════════════════════════════════════
 
 async def on_startup(bot: Bot) -> None:
-    global _stock_export_task
+    global _stock_export_task, _backup_task
     if WEBHOOK_URL:
         full = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
         await bot.set_webhook(full)
@@ -7383,13 +7464,17 @@ async def on_startup(bot: Bot) -> None:
     me = await bot.get_me()
     logger.info("@%s (id=%s) is online ✅", me.username, me.id)
     _stock_export_task = asyncio.create_task(stock_export_loop(bot))
+    _backup_task = asyncio.create_task(backup_loop(bot))
 
 
 async def on_shutdown(bot: Bot) -> None:
-    global _stock_export_task
+    global _stock_export_task, _backup_task
     if _stock_export_task is not None:
         _stock_export_task.cancel()
         _stock_export_task = None
+    if _backup_task is not None:
+        _backup_task.cancel()
+        _backup_task = None
     if WEBHOOK_URL:
         await bot.delete_webhook()
     logger.info("Bot shut down.")
