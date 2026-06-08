@@ -1,0 +1,36 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "UI/UX Modernization - Implement Modern Inline Keyboard Design throughout the bot, Better Emoji Layout, Clean Dashboard displays, Fast Navigation System with callback shortcuts, Professional Welcome Message, Responsive Menu Structure, Dark Theme Style Messages (using Unicode box-drawing and block characters), and Live Statistics Widgets in both user and admin panels.",
+  "status": "in_progress",
+  "steps": [
+    "1. Create a set of UI helper functions: _card(title, body, footer=None) for dark-theme card formatting using Unicode box-drawing characters (e.g. top: '╔══...══╗', sides: '║', bottom: '╚══...══╝'), _progress_bar(current, max, width=10) for visual progress bars, _mini_chart(values) for inline text sparkline charts, _status_dot(is_online) returning green/red circle emoji.",
+    "2. Create inline keyboard builder helpers: _inline_row(*buttons) for building InlineKeyboardMarkup rows, _paginate_inline(items, page, per_page, prefix) for paginated inline lists, _quick_actions_inline(actions_list) for generating quick-action button rows.",
+    "3. Redesign fmt_welcome() to use dark-theme card style with VIP badge, balance, quick stats (orders today, pending), and inline keyboard shortcuts for Buy Mail, Deposit, Order History as callback buttons below the message.",
+    "4. Redesign fmt_balance_screen() with modern card layout showing VIP progress bar, spending graph indicator, and membership duration.",
+    "5. Redesign fmt_admin_dashboard() with live statistics widgets: revenue today/week/month as formatted cards, pending counts with alert indicators, stock health summary, and quick-action inline buttons.",
+    "6. Add inline navigation callbacks: 'nav_home', 'nav_balance', 'nav_mail', 'nav_history', 'nav_admin' that allow quick jumping between sections without reply keyboard presses. Register these on router_global.",
+    "7. Redesign product listing display: Show products in a clean card format with status dot, stock indicator bar, price, and inline 'Buy' / 'Favorite' buttons per product instead of just reply keyboard selection.",
+    "8. Redesign order history display: Show orders in paginated inline format with expand/collapse details, copy account button, and repeat order button.",
+    "9. Add 'Dark Theme' message formatting throughout: Use monospace blocks for data displays, Unicode separators (thin/thick lines), subtle emoji indicators instead of heavy emoji spam, consistent spacing.",
+    "10. Implement responsive menu structure: Auto-adjust reply keyboard rows based on number of items. Use 2-column layout for shorter button texts, 1-column for longer ones.",
+    "11. Add live statistics widgets to user panel: Small inline stats at bottom of relevant screens (e.g., 'You have saved $X with coupons', 'Your rank: #N of M users').",
+    "12. Update all existing format functions (fmt_product_detail, fmt_service_detail, fmt_product_list_header) to use the new dark-theme card style consistently.",
+    "13. Ensure all new inline callbacks are registered and don't conflict with existing callback handlers (dep_ok, dep_no, tfa_refresh, tfa_timer, tfa_setkey, vpn/proxy fulfill callbacks).",
+    "14. Verify syntax with: python3 -c \"import ast; ast.parse(open('bot.py').read())\""
+  ],
+  "acceptance_criteria": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\" passes without errors",
+    "All existing format functions still produce valid HTML for Telegram's parse_mode=HTML",
+    "New inline keyboards use InlineKeyboardButton/InlineKeyboardMarkup correctly",
+    "Callback data strings are unique and don't conflict with existing callbacks",
+    "Reply keyboards remain as primary navigation - inline keyboards supplement them for actions",
+    "Dark theme card helpers produce clean output within Telegram's message character limits",
+    "No breaking changes to existing message flows - user can still navigate with reply keyboard buttons"
+  ],
+  "verification": [
+    "Run: cd /projects/sandbox/Mail-Shop && python3 -c \"import ast; ast.parse(open('bot.py').read()); print('SYNTAX OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
