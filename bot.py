@@ -929,6 +929,8 @@ _DEFAULT_SETTINGS = {
     "proxy_data_options": "1 GB,5 GB,10 GB,50 GB",
     "stock_export_interval": 30,
     "referral_bonus_pct": 5.0,
+    "maintenance_mode": "OFF",
+    "maintenance_message": "\ud83d\udd27 Bot is under maintenance. Please try again later.",
 }
 
 async def get_settings() -> dict:
@@ -1837,7 +1839,10 @@ def fmt_settings(s: dict) -> str:
         f"Stock Export Interval: <b>{s.get('stock_export_interval', 30):.0f} min</b>\n"
         f"\n"
         f"<b>── 🎯 Referral ──</b>\n"
-        f"Referral Bonus: <b>{s.get('referral_bonus_pct', 5.0):.1f}%</b>"
+        f"Referral Bonus: <b>{s.get('referral_bonus_pct', 5.0):.1f}%</b>\n"
+        f"\n"
+        f"<b>── 🔧 Maintenance ──</b>\n"
+        f"🔧 Maintenance: <b>{str(s.get('maintenance_mode', 'OFF')).upper()}</b>"
     )
 
 
@@ -2165,6 +2170,8 @@ SETTINGS_MAP = {
     _b("📡 Proxy Data Options"): ("proxy_data_options",    str,   "Enter data options separated by commas (e.g. 1 GB,5 GB,10 GB,50 GB).\nAdmin can set any GB/MB values here:"),
     _b("⏱ Stock Export Interval"): ("stock_export_interval", float, "Enter interval in minutes for auto stock export to group (e.g. 30):"),
     _b("🎯 Referral Bonus %"): ("referral_bonus_pct", float, "Enter referral bonus % (0-100):"),
+    _b("🔧 Maintenance Mode"): ("maintenance_mode", str, "Enter ON or OFF:"),
+    _b("🔧 Maintenance Msg"): ("maintenance_message", str, "Enter maintenance message text:"),
 }
 
 def admin_settings_kb() -> ReplyKeyboardMarkup:
@@ -2353,6 +2360,8 @@ class AntiSpamMiddleware(BaseMiddleware):
 # MIDDLEWARE — Auth  (BUG FIX: also handle CallbackQuery)
 # ══════════════════════════════════════════════════════════════════
 
+_maintenance_cache: Dict[str, Any] = {"value": None, "ts": 0.0}
+
 class AuthMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: TelegramObject, data: Dict[str, Any]) -> Any:
         user = None
@@ -2381,6 +2390,23 @@ class AuthMiddleware(BaseMiddleware):
             elif isinstance(event, CallbackQuery):
                 await event.answer("🚫 Account banned.", show_alert=True)
             return
+
+        # Maintenance mode check for non-admin users
+        if not is_admin(user.id):
+            now = time.time()
+            if now - _maintenance_cache["ts"] > 30:
+                _settings = await get_settings()
+                _maintenance_cache["value"] = _settings
+                _maintenance_cache["ts"] = now
+            else:
+                _settings = _maintenance_cache["value"]
+            if str(_settings.get("maintenance_mode", "OFF")).strip().upper() == "ON":
+                maint_msg = _settings.get("maintenance_message") or "🔧 Bot is under maintenance. Please try again later."
+                if isinstance(event, Message):
+                    await event.answer(maint_msg)
+                elif isinstance(event, CallbackQuery):
+                    await event.answer("🔧 Bot is under maintenance.", show_alert=True)
+                return
 
         # Force-join check for non-admin users (skip for Support button)
         if not is_admin(user.id):
@@ -7034,6 +7060,15 @@ async def receive_setting(message: Message, state: FSMContext):
             return
     else:
         value = raw
+        if key == "maintenance_mode":
+            normalized = raw.strip().upper()
+            if normalized in ("ON", "1", "TRUE", "YES"):
+                value = "ON"
+            elif normalized in ("OFF", "0", "FALSE", "NO"):
+                value = "OFF"
+            else:
+                await message.answer("❌ Invalid value. Enter ON or OFF (also accepts yes/no, true/false, 1/0).")
+                return
     await update_settings({key: value})
     settings = await get_settings()
     await state.set_state(AdminFlow.settings_menu)
