@@ -1048,7 +1048,7 @@ async def get_service_products(category: str) -> Dict[str, dict]:
 # FIREBASE — Stock  (BUG FIX: item reassignment inside loop)
 # ══════════════════════════════════════════════════════════════════
 
-async def add_stock_items(pid: str, items: List[str]) -> int:
+async def add_stock_items(pid: str, items: List[str], bot=None) -> int:
     """Add items to stock. Returns number of items actually added."""
     existing = await db_get(f"stocks/{pid}") or {}
     before = len(existing)
@@ -1066,34 +1066,30 @@ async def add_stock_items(pid: str, items: List[str]) -> int:
     await db_update(f"products/{pid}", update_data)
     added = count - before
     # Notify restock subscribers if product was out of stock
-    if was_empty and added > 0:
-        asyncio.create_task(_notify_restock_subscribers(pid))
+    if was_empty and added > 0 and bot:
+        asyncio.create_task(_notify_restock_subscribers(pid, bot))
     return added  # Return actually added count, not total
 
 
-async def _notify_restock_subscribers(pid: str) -> None:
+async def _notify_restock_subscribers(pid: str, bot) -> None:
     """Notify users who subscribed to restock notifications for this product."""
     try:
-        from aiogram import Bot as _Bot
         product = await get_product(pid)
         if not product:
             return
         subscribers = await get_restock_subscribers(pid)
         if not subscribers:
             return
-        bot = _Bot.get_current()
-        if not bot:
-            return
         name = product.get("name", "Unknown")
-        emoji = product.get("emoji", "📦")
+        emoji = product.get("emoji", "\U0001F4E6")
         stock = product.get("stock_count", 0)
         for uid in subscribers:
             try:
                 await bot.send_message(
                     uid,
-                    f"🔔 <b>Restock Alert!</b>\n{_SEP}\n"
+                    f"\U0001F514 <b>Restock Alert!</b>\n{_SEP}\n"
                     f"{emoji} <b>{name}</b> is back in stock!\n"
-                    f"📦 Available: <b>{stock}</b> items\n\n"
+                    f"\U0001F4E6 Available: <b>{stock}</b> items\n\n"
                     f"Hurry up before it sells out!",
                 )
             except Exception:
@@ -3016,14 +3012,16 @@ async def check_force_join(bot: Bot, uid: int) -> Tuple[bool, List[str]]:
     return len(failed) == 0, failed
 
 
-async def send_main_menu(message: Message, state: FSMContext, text: Optional[str] = None) -> None:
+async def send_main_menu(message: Message, state: FSMContext, text: Optional[str] = None, user_id: Optional[int] = None) -> None:
     await state.clear()
     settings = await get_settings()
-    user = await get_user(message.from_user.id) or {}
+    uid = user_id or message.from_user.id
+    user = await get_user(uid) or {}
     shop_name = settings.get("shop_name", "\U0001F6CD Neroxa Shop")
     welcome   = settings.get("welcome_message", WELCOME_MSG)
     balance   = user.get("balance", 0)
-    display = text or fmt_welcome(shop_name, welcome, message.from_user.first_name, balance, user)
+    first_name = user.get("first_name", message.from_user.first_name)
+    display = text or fmt_welcome(shop_name, welcome, first_name, balance, user)
     # Quick access inline shortcuts
     quick_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -3060,7 +3058,7 @@ async def go_home(message: Message, state: FSMContext):
 
 @router_global.callback_query(F.data == "nav_home")
 async def nav_home_cb(callback: CallbackQuery, state: FSMContext):
-    await send_main_menu(callback.message, state)
+    await send_main_menu(callback.message, state, user_id=callback.from_user.id)
     await callback.answer()
 
 
@@ -3134,10 +3132,10 @@ async def nav_admin_cb(callback: CallbackQuery, state: FSMContext):
 
 @router_global.callback_query(F.data == "nav_deposit")
 async def nav_deposit_cb(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(UserFlow.deposit_method)
+    await state.set_state(UserFlow.dep_method)
     await callback.message.answer(
         "\U0001F4B3 <b>Deposit</b>\nSelect a deposit method from the menu.",
-        reply_markup=main_menu_kb(),
+        reply_markup=deposit_method_kb(),
     )
     await callback.answer()
 
@@ -6229,7 +6227,7 @@ async def adm_quick_analytics_cb(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("\U0001F6AB Denied", show_alert=True)
         return
-    await state.set_state(AdminFlow.analytics_detail)
+    await state.set_state(AdminFlow.menu)
     await callback.message.answer("\U0001F4CA Opening analytics...", reply_markup=admin_main_kb())
     await callback.answer()
 
@@ -6831,7 +6829,7 @@ async def admin_products_import(message: Message, state: FSMContext):
             created += 1
             # Import stock items if present
             if p.get("stock_items"):
-                added = await add_stock_items(pid, p["stock_items"])
+                added = await add_stock_items(pid, p["stock_items"], bot=message.bot)
                 stock_added += added
         except Exception:
             skipped += 1
@@ -7150,7 +7148,7 @@ async def receive_stock_file(message: Message, state: FSMContext):
         await state.set_state(AdminFlow.stock_detail)
         return
 
-    added     = await add_stock_items(pid, items)
+    added     = await add_stock_items(pid, items, bot=message.bot)
     new_count = await get_stock_count(pid)
     await log_admin_action(message.from_user.id, "add_stock", f"Product:{product.get('name', pid)} +{added} items")
     await state.set_state(AdminFlow.stock_detail)
@@ -7255,7 +7253,7 @@ async def receive_import_all_stock_file(message: Message, state: FSMContext):
                         items.append(email)
 
         if items:
-            added = await add_stock_items(pid, items)
+            added = await add_stock_items(pid, items, bot=message.bot)
             total_imported += added
             matched_sheets += 1
             product_name = products[pid].get("name", pid)
@@ -7308,7 +7306,7 @@ async def receive_manual_stock(message: Message, state: FSMContext):
     if not lines:
         await message.answer("❌ No valid lines found.")
         return
-    added     = await add_stock_items(pid, lines)
+    added     = await add_stock_items(pid, lines, bot=message.bot)
     new_count = await get_stock_count(pid)
     await state.set_state(AdminFlow.stock_detail)
     await message.answer(
@@ -8939,6 +8937,17 @@ async def admin_advanced_search_input(message: Message, state: FSMContext):
     )
 
 
+@router_admin.callback_query(F.data == "adm_search_more")
+async def adm_search_more_cb(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("\U0001F6AB Denied", show_alert=True)
+        return
+    await call.answer(
+        "Use more specific search terms to narrow results.",
+        show_alert=True,
+    )
+
+
 @router_admin.callback_query(F.data.startswith("adm_uinfo:"))
 async def admin_user_info_cb(call: CallbackQuery):
     if not is_admin(call.from_user.id):
@@ -9248,12 +9257,20 @@ async def admin_profit_calc(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     products = await get_all_products()
-    orders, vpn, proxy = await asyncio.gather(
+    orders, vpn, proxy, ref_costs_data = await asyncio.gather(
         db_get("orders"), db_get("vpn_orders"), db_get("proxy_orders"),
+        db_get("referral_costs"),
     )
     orders = orders or {}
     vpn = vpn or {}
     proxy = proxy or {}
+    ref_costs_data = ref_costs_data or {}
+
+    # Calculate total referral costs
+    total_referral_costs = sum(
+        entry.get("commission", 0) for entry in ref_costs_data.values()
+        if isinstance(entry, dict)
+    )
 
     # Calculate per-product revenue
     product_revenue = defaultdict(float)
@@ -9275,7 +9292,7 @@ async def admin_profit_calc(message: Message, state: FSMContext):
 
     total_revenue = sum(product_revenue.values())
     total_cost = 0.0
-    lines = [f"💹 <b>Profit Calculator</b>\n{_SEP}\n"]
+    lines = [f"\U0001F4B9 <b>Profit Calculator</b>\n{_SEP}\n"]
     lines.append("<b>Per-Product Breakdown:</b>\n")
     for pid, p in products.items():
         rev = product_revenue.get(pid, 0)
@@ -9286,17 +9303,19 @@ async def admin_profit_calc(message: Message, state: FSMContext):
         profit = rev - cost
         margin = (profit / rev * 100) if rev > 0 else 0
         if rev > 0 or sold > 0:
+            _pkg_emoji = p.get('emoji', '\U0001F4E6')
             lines.append(
-                f"  {p.get('emoji', '📦')} <b>{p.get('name', pid)}</b>\n"
+                f"  {_pkg_emoji} <b>{p.get('name', pid)}</b>\n"
                 f"    Revenue: ${rev:.2f} | Cost: ${cost:.2f} | Profit: ${profit:.2f} ({margin:.0f}%)"
             )
-    total_profit = total_revenue - total_cost
+    total_profit = total_revenue - total_cost - total_referral_costs
     overall_margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0
     lines.append(f"\n{_SEP}")
-    lines.append(f"💰 <b>Total Revenue:</b> ${total_revenue:.2f}")
-    lines.append(f"💸 <b>Total Cost:</b> ${total_cost:.2f}")
-    lines.append(f"💹 <b>Total Profit:</b> ${total_profit:.2f}")
-    lines.append(f"📊 <b>Overall Margin:</b> {overall_margin:.1f}%")
+    lines.append(f"\U0001F4B0 <b>Total Revenue:</b> ${total_revenue:.2f}")
+    lines.append(f"\U0001F4B8 <b>Total Cost:</b> ${total_cost:.2f}")
+    lines.append(f"\U0001F91D <b>Referral Costs:</b> ${total_referral_costs:.2f}")
+    lines.append(f"\U0001F4B9 <b>Net Profit:</b> ${total_profit:.2f}")
+    lines.append(f"\U0001F4CA <b>Overall Margin:</b> {overall_margin:.1f}%")
     lines.append(f"\n<i>Set cost per item via:</i> <code>set_cost:PRODUCT_ID:amount</code>")
     await state.set_state(AdminFlow.profit_calc)
     await message.answer("\n".join(lines), reply_markup=_kb([BACK_BTN, HOME_BTN]))
