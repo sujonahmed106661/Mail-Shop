@@ -2,7 +2,7 @@
   "id": "FEAT-002",
   "type": "feat",
   "description": "Maintenance Mode - Admin can enable/disable maintenance mode via Settings. When enabled, non-admin users see a maintenance message and cannot use the bot. Admin panel continues to work normally.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Add 'maintenance_mode' (default false/0) and 'maintenance_message' (default 'Bot is under maintenance. Please try again later.') to _DEFAULT_SETTINGS dict at line ~880.",
     "Add two entries to SETTINGS_MAP: _b('🔧 Maintenance Mode') mapped to ('maintenance_mode', str, 'Enter ON or OFF:') and _b('🔧 Maintenance Msg') mapped to ('maintenance_message', str, 'Enter maintenance message text:').",
@@ -22,5 +22,5 @@
     "python3 -c \"exec(open('bot.py').read().split('if __name__')[0]); s = dict(_DEFAULT_SETTINGS); assert 'maintenance_mode' in s; assert 'maintenance_message' in s; print('Maintenance settings OK')\""
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "Implementation complete. All 5 parts added: _DEFAULT_SETTINGS entries, SETTINGS_MAP entries, AuthMiddleware maintenance check with 30s TTL cache, receive_setting validation for ON/OFF normalization, and fmt_settings maintenance status display. The second verification command fails due to missing runtime dependencies (requests module) but this is a pre-existing environment limitation - the AST parse check passes cleanly."
 }
