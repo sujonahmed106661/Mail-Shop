@@ -1,0 +1,14 @@
+{
+  "task_id": "task-fix-inline-admin-referral",
+  "task_description": "Fix three issues from the major upgrade: (1) Remove all user-facing Inline Keyboards and restore 100% Reply Keyboard navigation, (2) Compact the oversized admin panel into sub-menus, (3) Convert the referral system from hidden surcharge to Bonus Balance model where nobody loses real money. Also restore the clean bot design by removing clutter from inline buttons.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
+  "blocked_reason": null,
+  "verification": {
+    "build": "pass",
+    "tests": "pass",
+    "test_quality": "pass",
+    "docker_build": "skipped",
+    "summary": "AST validation passes. All review fixes applied: (1) Bonus scope overwrite fixed - merges wildcard into existing allowed_products. (2) Dead callbacks removed (track_order_cb, quick_mail_cb, quick_balance_cb, quick_lastorder_cb). (3) User menu compacted to 6 rows with More submenu for Trending/Favorites/Search/Stats."
+  }
+}
