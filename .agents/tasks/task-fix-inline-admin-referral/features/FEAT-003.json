@@ -2,7 +2,7 @@
   "id": "FEAT-003",
   "type": "fix",
   "description": "Convert the referral system from a hidden surcharge model to a Bonus Balance model. Nobody loses real money: the shop owner does not pay extra, the referred user does not pay extra. Instead, when a referred user makes a purchase, the referrer earns a small Bonus Balance (usable only as a discount on future purchases, cannot be withdrawn). Use the existing bonus system (get_bonus, set_bonus, use_bonus, compute_bonus_usage). Also update compute_bonus_usage to support a wildcard '*' in allowed_products so referral bonus works on ALL products.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Modify compute_bonus_usage() (line ~877) to check for '*' wildcard: if '*' is in bonus.get('allowed_products', []), allow bonus usage on any product. Change the condition from 'if pid in bonus.get(\"allowed_products\", [])' to 'if (\"*\" in bonus.get(\"allowed_products\", []) or pid in bonus.get(\"allowed_products\", []))' so bonus works universally for referral rewards.",
     "Remove get_referral_surcharge() function entirely (lines ~932-948). It calculated hidden surcharge on buyers.",
@@ -28,5 +28,5 @@
     "grep 'ref_surcharge' bot.py should return no matches"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All changes verified. Removed get_referral_surcharge entirely. Converted pay_referral_commission to use set_bonus with wildcard ['*']. Removed surcharge from 4 purchase flows (2 mail, 1 VPN, 1 proxy). Removed referral_costs from admin profit report. Updated referral display text. AST validation passes."
 }
