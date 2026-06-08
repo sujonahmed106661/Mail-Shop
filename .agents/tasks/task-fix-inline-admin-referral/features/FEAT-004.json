@@ -2,7 +2,7 @@
   "id": "FEAT-004",
   "type": "fix",
   "description": "Compact the admin Settings menu by grouping 19 settings items into sub-categories (Payment Settings, Channel Settings, Shop Settings, System Settings). Also perform a code audit to fix any issues introduced by the prior 3 features (broken references, orphaned code, missing state handlers).",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Group SETTINGS_MAP into sub-categories. Create new button constants for settings sub-menus: BTN_SET_PAYMENT = _b('💳 Payment Settings'), BTN_SET_CHANNELS = _b('📣 Channel Settings'), BTN_SET_SHOP = _b('🏪 Shop Settings'), BTN_SET_SYSTEM = _b('🔧 System Settings')",
     "Redesign admin_settings_kb() to show only 4-5 category buttons plus Back/Home instead of all 19 items",
@@ -27,5 +27,5 @@
     "grep 'get_referral_surcharge' bot.py should return no matches (confirming cleanup)"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "Implemented compact settings menu grouping 19 items into 4 categories (Payment, Channels, Shop, System). Uses FSM data-based routing with settings_category field. After editing a setting, user returns to their sub-category. Code audit found no orphaned references - get_referral_surcharge, _inline_row, _paginate_inline, ref_surcharge, referral_costs all confirmed removed. restock_sub functions are legitimate and in use. AST validation passes."
 }
