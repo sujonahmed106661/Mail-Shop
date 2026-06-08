@@ -2674,8 +2674,39 @@ SETTINGS_MAP = {
     _b("💾 Backup Interval"): ("backup_interval_hours", float, "Enter backup interval in hours (e.g. 24 for daily, 0 to disable):"),
 }
 
+# ── Settings Sub-Category Buttons ──
+BTN_SET_PAYMENT  = _b("💳 Payment")
+BTN_SET_CHANNELS = _b("📣 Channels")
+BTN_SET_SHOP     = _b("🏪 Shop")
+BTN_SET_SYSTEM   = _b("🔧 System")
+
+SETTINGS_CATEGORIES = {
+    BTN_SET_PAYMENT: [
+        _b("💱 USD Rate"), _b("📱 bKash Number"), _b("📱 bKash Min Deposit"),
+        _b("📱 Nagad Number"), _b("📱 Nagad Min Deposit"),
+        _b("🔶 Binance UID"), _b("🔶 Binance Min Deposit"),
+    ],
+    BTN_SET_CHANNELS: [
+        _b("📣 Force Join #1"), _b("📣 Force Join #2"), _b("🆘 Support Link"),
+    ],
+    BTN_SET_SHOP: [
+        _b("🏪 Shop Name"), _b("💬 Welcome Message"), _b("🔑 Get 2FA Link"),
+        _b("🎯 Referral Bonus %"), _b("📡 Proxy Data Options"),
+    ],
+    BTN_SET_SYSTEM: [
+        _b("⚠️ Low Stock Alert"), _b("⏱ Stock Export Interval"),
+        _b("🔧 Maintenance Mode"), _b("🔧 Maintenance Msg"), _b("💾 Backup Interval"),
+    ],
+}
+
 def admin_settings_kb() -> ReplyKeyboardMarkup:
-    keys = list(SETTINGS_MAP.keys())
+    return _kb(
+        [BTN_SET_PAYMENT, BTN_SET_CHANNELS],
+        [BTN_SET_SHOP, BTN_SET_SYSTEM],
+        [BACK_BTN, HOME_BTN],
+    )
+
+def settings_category_kb(keys: list) -> ReplyKeyboardMarkup:
     rows = [keys[i:i+2] for i in range(0, len(keys), 2)]
     rows.append([BACK_BTN, HOME_BTN])
     return _kb(*rows)
@@ -7922,9 +7953,24 @@ async def admin_settings(message: Message, state: FSMContext):
 @router_admin.message(AdminFlow.settings_menu)
 async def admin_settings_action(message: Message, state: FSMContext):
     if message.text in (BACK_BTN, HOME_BTN):
+        data = await state.get_data()
+        if data.get("settings_category"):
+            # Back from sub-category -> show categories
+            await state.update_data(settings_category=None)
+            settings = await get_settings()
+            await message.answer(fmt_settings(settings), reply_markup=admin_settings_kb())
+            return
+        # Back from categories -> admin main
         await state.set_state(AdminFlow.menu)
         await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
         return
+    # Check if it's a category button
+    if message.text in SETTINGS_CATEGORIES:
+        keys = SETTINGS_CATEGORIES[message.text]
+        await state.update_data(settings_category=message.text)
+        await message.answer(f"⚙️ <b>{message.text}</b>", reply_markup=settings_category_kb(keys))
+        return
+    # Check if it's a setting item
     info = SETTINGS_MAP.get(message.text)
     if not info:
         await message.answer("❌ Select from keyboard.")
@@ -7941,9 +7987,14 @@ async def admin_settings_action(message: Message, state: FSMContext):
 @router_admin.message(AdminFlow.settings_edit)
 async def receive_setting(message: Message, state: FSMContext):
     if message.text in (CANCEL_BTN, BACK_BTN, HOME_BTN):
-        settings = await get_settings()
+        data = await state.get_data()
+        cat = data.get("settings_category")
         await state.set_state(AdminFlow.settings_menu)
-        await message.answer(fmt_settings(settings), reply_markup=admin_settings_kb())
+        if cat and cat in SETTINGS_CATEGORIES:
+            await message.answer(f"⚙️ <b>{cat}</b>", reply_markup=settings_category_kb(SETTINGS_CATEGORIES[cat]))
+        else:
+            settings = await get_settings()
+            await message.answer(fmt_settings(settings), reply_markup=admin_settings_kb())
         return
     data      = await state.get_data()
     key       = data.get("s_key", "")
@@ -7981,10 +8032,18 @@ async def receive_setting(message: Message, state: FSMContext):
     await update_settings({key: value})
     settings = await get_settings()
     await state.set_state(AdminFlow.settings_menu)
-    await message.answer(
-        f"✅ <b>Updated!</b>  {key} → <code>{value or '(cleared)'}</code>\n\n" + fmt_settings(settings),
-        reply_markup=admin_settings_kb(),
-    )
+    data = await state.get_data()
+    cat = data.get("settings_category")
+    if cat and cat in SETTINGS_CATEGORIES:
+        await message.answer(
+            f"✅ <b>Updated!</b>  {key} → <code>{value or '(cleared)'}</code>",
+            reply_markup=settings_category_kb(SETTINGS_CATEGORIES[cat]),
+        )
+    else:
+        await message.answer(
+            f"✅ <b>Updated!</b>  {key} → <code>{value or '(cleared)'}</code>\n\n" + fmt_settings(settings),
+            reply_markup=admin_settings_kb(),
+        )
 
 
 # ══════════════════════════════════════════════════════════════════

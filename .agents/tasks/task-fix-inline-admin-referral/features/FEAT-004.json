@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-004",
+  "type": "fix",
+  "description": "Compact the admin Settings menu by grouping 19 settings items into sub-categories (Payment Settings, Channel Settings, Shop Settings, System Settings). Also perform a code audit to fix any issues introduced by the prior 3 features (broken references, orphaned code, missing state handlers).",
+  "status": "in_progress",
+  "steps": [
+    "Group SETTINGS_MAP into sub-categories. Create new button constants for settings sub-menus: BTN_SET_PAYMENT = _b('💳 Payment Settings'), BTN_SET_CHANNELS = _b('📣 Channel Settings'), BTN_SET_SHOP = _b('🏪 Shop Settings'), BTN_SET_SYSTEM = _b('🔧 System Settings')",
+    "Redesign admin_settings_kb() to show only 4-5 category buttons plus Back/Home instead of all 19 items",
+    "Create sub-keyboards for each settings category that shows only the relevant items",
+    "Add FSM states for settings sub-menus (AdminFlow.settings_payment, settings_channels, settings_shop, settings_system) or reuse settings_menu with data-based routing",
+    "Add handlers for the new settings category buttons that show the sub-keyboard",
+    "Ensure the existing settings_edit handler still works - it reads from SETTINGS_MAP so the actual setting items must still be accessible from their sub-keyboards",
+    "Code audit: Check for any broken references to removed functions (get_referral_surcharge, _inline_row, _paginate_inline, removed callback handlers). Grep for any orphaned references.",
+    "Code audit: Verify all admin handlers that moved to sub-menus still work correctly - check that their state filters match the new sub-menu states",
+    "Code audit: Ensure the fav_add callback that was in admin contexts (if any) still works - admin inline keyboards were kept",
+    "AST validation must pass"
+  ],
+  "acceptance_criteria": [
+    "Admin settings shows category buttons (4-5) instead of 19 items on first screen",
+    "All 19 settings items are still accessible through their category sub-menus",
+    "No broken function references in the codebase",
+    "AST validation passes"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+    "grep 'admin_settings_kb' bot.py should show the redesigned compact function",
+    "grep 'get_referral_surcharge' bot.py should return no matches (confirming cleanup)"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
