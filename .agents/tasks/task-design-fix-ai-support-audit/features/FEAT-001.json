@@ -2,7 +2,7 @@
   "id": "FEAT-001",
   "type": "fix",
   "description": "Remove the ugly _card() box-drawing system and revert all format functions to the original clean style using _SEP separators and <b>title</b> headers. Also add AI Support feature and fix code issues.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "STEP 1 - Remove _card() system: Delete the `_CARD_W = 24` constant (line 1852) and the `_card()` function definition (lines 1854-1866). Keep `_progress_bar()`, `_mini_chart()`, `_status_dot()` as they are useful. Remove `_quick_actions_inline()` and `_responsive_kb()` functions since they are not needed for reply-keyboard-only approach (though _responsive_kb is used, so keep it if called elsewhere).",
     "STEP 2 - Rewrite fmt_welcome to simple style: Replace the _card()-based version with a clean format like: f\"<b>{shop_name}</b>\\n{_SEP}\\n{welcome}\\n\\n👤 <b>{first_name}</b>{vip_badge}\\n💰 Balance: <code>${balance:.2f}</code>\\n🛒 Orders: <b>{order_count}</b>\\n{_SEP}\\nStatus: ✅ Active\"",
@@ -36,5 +36,5 @@
     "grep -c 'AI Support' bot.py should return at least 1"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All _card() usages removed and replaced with clean _SEP-based formatting. _responsive_kb removed as unused. AI Support fully implemented with FAQ topics and keyword matching. Box-drawing characters only remain in file header comments (cosmetic, not in any fmt_ function). All acceptance criteria verified passing."
 }
