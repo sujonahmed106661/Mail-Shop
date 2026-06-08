@@ -1,0 +1,40 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "User Panel Enhancements - Add VIP Badge System, Trending Services, Pinned/Favorite Services, One-Click Repeat Order, Restock Notifications, Service Online/Offline Status, Advanced Search & Filters, Real-time Order Tracking, Quick Access Shortcuts, and Live User Statistics Dashboard. Also implement the professional welcome message and improved user main menu with dark-theme style formatting.",
+  "status": "completed",
+  "steps": [
+    "1. Add new Firebase helper functions for VIP system (get/set VIP status, VIP tiers based on total_spent), favorites (get/set user favorites), restock subscriptions (subscribe/unsubscribe/notify), and activity logs.",
+    "2. Add new UserFlow FSM states: favorites_menu, search_services, order_tracking, user_stats, repeat_order_confirm.",
+    "3. Add new button definitions for user panel features: BTN_VIP_BADGE, BTN_TRENDING, BTN_FAVORITES, BTN_REPEAT_ORDER, BTN_RESTOCK_NOTIFY, BTN_SEARCH, BTN_QUICK_ACCESS, BTN_MY_STATS, BTN_ORDER_TRACK.",
+    "4. Implement VIP Badge System: Determine VIP tier (Bronze/Silver/Gold/Diamond) based on total_spent thresholds. Show VIP badge emoji in balance screen and welcome message. Store VIP tier in user data.",
+    "5. Implement Trending Services Section: Track product purchase counts over last 7 days (use orders data). Show top 5 trending products with fire emoji and purchase count when user taps Trending button.",
+    "6. Implement Pinned/Favorite Services: Allow users to favorite products via inline button during product browsing. Store favorites in Firebase users/{uid}/favorites. Show favorites list with quick-buy option.",
+    "7. Implement One-Click Repeat Order: In order history, add an inline button 'Repeat Order' that pre-fills product and quantity from a previous order and sends user to confirmation.",
+    "8. Implement Restock Notifications: When a product is out of stock, show 'Notify Me' inline button. Store subscription in Firebase restock_subs/{pid}/{uid}. When admin adds stock, notify subscribed users.",
+    "9. Implement Service Online/Offline Status: Add 'status' field to products (online/offline). Show green/red dot emoji next to product names. Admin can toggle status (added in FEAT-003).",
+    "10. Implement Advanced Service Search & Filters: Add search handler that accepts text input and filters products by name (fuzzy match). Show results with inline keyboard for quick selection.",
+    "11. Implement Real-time Order Tracking: Add inline status display for VPN/Proxy pending orders showing current status with progress indicators. Add callback for checking order status.",
+    "12. Implement Quick Access Shortcuts: Add a row of inline keyboard shortcuts at the bottom of welcome message for most-used actions (Buy Mail, Check Balance, Last Order).",
+    "13. Implement Live User Statistics Dashboard: Show user their personal stats - total orders, spending trends (this week vs last week), favorite category, VIP progress bar.",
+    "14. Redesign the welcome message with professional dark-theme styling using block characters, better emoji layout, and live balance/VIP badge display.",
+    "15. Update main_menu_kb() to include new navigation buttons (Trending, Favorites, My Stats) in a clean layout while keeping all existing buttons.",
+    "16. Verify syntax with: python3 -c \"import ast; ast.parse(open('bot.py').read())\""
+  ],
+  "acceptance_criteria": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\" passes without errors",
+    "All existing user handlers (BTN_BALANCE, BTN_GET_MAIL, BTN_TEMP_MAIL, BTN_BUY_VPN, BTN_BUY_PROXY, BTN_DEPOSIT, BTN_GET_CODE, BTN_GET_2FA, BTN_HISTORY, BTN_SUPPORT, BTN_REFERRAL) remain functional and unchanged in behavior",
+    "New UserFlow states are added to the StatesGroup without removing existing ones",
+    "New buttons use _b() helper for Unicode bold text",
+    "VIP tier calculation is based on total_spent field already in user data",
+    "Trending section queries existing orders data without new Firebase paths",
+    "Restock notification system uses new Firebase path restock_subs/",
+    "All new handlers are registered on appropriate routers"
+  ],
+  "verification": [
+    "Run: cd /projects/sandbox/Mail-Shop && python3 -c \"import ast; ast.parse(open('bot.py').read()); print('SYNTAX OK')\"",
+    "Run: cd /projects/sandbox/Mail-Shop && python3 -c \"import bot; print('Import OK')\" 2>&1 | head -5"
+  ],
+  "blocked_reason": null,
+  "findings": "All 10 user panel features implemented successfully. VIP tiers (Bronze $10+, Silver $50+, Gold $200+, Diamond $500+) based on total_spent. Trending shows top 5 products by 7-day purchases. Favorites stored at users/{uid}/favorites. Restock subs at restock_subs/{pid}/{uid} with auto-notification on add_stock_items. Search filters by name/description. Order tracking via inline callbacks. Quick access inline shortcuts in welcome. Stats dashboard with weekly comparison. Service status dots added to mail product list. New router_user_panel included in build_dp. Import check fails due to missing packages in dev env (requests module) but AST parse passes cleanly."
+}

@@ -1,0 +1,36 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Admin Panel Enhancements - Add Real-time Sales Analytics, Low Stock Alerts (auto-trigger), Auto Price Sync, Auto Product Import, Multiple Admin Roles, Advanced User Search, Transaction Export (CSV/Excel), Service Status Manager, Profit Calculator, and Activity Logs system.",
+  "status": "completed",
+  "steps": [
+    "1. Add new AdminFlow FSM states: analytics_detail, low_stock_alerts, price_sync, auto_import, roles_menu, advanced_search, export_transactions, service_status, profit_calc, activity_logs.",
+    "2. Add new admin button definitions: BTN_ADM_LOW_STOCK, BTN_ADM_ROLES, BTN_ADM_EXPORT_TX, BTN_ADM_STATUS_MGR, BTN_ADM_PROFIT, BTN_ADM_LOGS, BTN_ADM_PRICE_SYNC, BTN_ADM_AUTO_IMPORT.",
+    "3. Implement Real-time Sales Analytics enhancement: Extend existing analytics handler to show hourly breakdown for today, daily chart for week (text-based bar chart), conversion rate, and average order value.",
+    "4. Implement Low Stock Alerts: Auto-check stock levels when admin opens dashboard. Show products below threshold with inline 'Restock' button. Also send proactive alert to admins when stock drops below threshold during purchases.",
+    "5. Implement Auto Price Sync: Allow admin to set percentage markup rules per category. When toggled on, new products inherit the category markup. Store rules in Firebase settings/price_rules.",
+    "6. Implement Auto Product Import: Allow admin to set a Firebase path or paste a JSON array of products to auto-import. Parse and create products in batch with validation.",
+    "7. Implement Multiple Admin Roles: Add role system (owner/admin/moderator) stored in Firebase admin_roles/{uid}. Owner can manage roles. Moderator has limited access (view-only for some features). Check role in sensitive operations.",
+    "8. Implement Advanced User Search: Search by username, user ID, balance range, order count, join date range. Show results as paginated inline keyboard list.",
+    "9. Implement Transaction Export (CSV/Excel): Export all orders, deposits, VPN orders, proxy orders as formatted xlsx with sheets per type. Include date range filter.",
+    "10. Implement Service Status Manager: Admin screen to toggle products online/offline with a single tap. Show all products with current status. Bulk toggle option.",
+    "11. Implement Profit Calculator: Show revenue vs estimated cost breakdown. Allow admin to set cost-per-item for products. Calculate profit margins per product and overall.",
+    "12. Implement Activity Logs: Log admin actions (approve deposit, ban user, add stock, etc.) to Firebase activity_logs/ with timestamp, admin_id, action, details. Show recent logs with pagination.",
+    "13. Update admin_main_kb() to include new buttons in organized rows while keeping all existing admin buttons.",
+    "14. Verify syntax with: python3 -c \"import ast; ast.parse(open('bot.py').read())\""
+  ],
+  "acceptance_criteria": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\" passes without errors",
+    "All existing admin handlers remain functional (dashboard, products CRUD, stock management, users, deposits approve/reject, VPN orders, proxy orders, coupons, broadcast, settings, analytics, order lookup, data packages)",
+    "New AdminFlow states added without removing existing ones",
+    "admin_main_kb() includes all new and existing buttons",
+    "Activity log function is called from existing admin actions (deposit approve, ban user, add stock)",
+    "Transaction export generates valid xlsx using openpyxl patterns already in the codebase",
+    "Role system defaults existing ADMIN_IDS to 'owner' role"
+  ],
+  "verification": [
+    "Run: cd /projects/sandbox/Mail-Shop && python3 -c \"import ast; ast.parse(open('bot.py').read()); print('SYNTAX OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": "All 10 admin panel enhancement features implemented. Added new AdminFlow states (analytics_detail, low_stock_alerts, price_sync, auto_import, roles_menu, roles_assign, advanced_search, export_transactions, export_tx_dates, service_status, profit_calc, profit_set_cost, activity_logs). Added 8 new admin buttons to admin_main_kb(). Activity logging integrated into deposit approve/reject, ban/unban user, and stock upload handlers. Advanced user search accessible via inline callback from Users submenu. Role system defaults ADMIN_IDS to owner. Transaction export uses openpyxl with styled headers. The existing analytics handler now shows an inline button for detailed breakdown. Dashboard auto-checks low stock on open."
+}
