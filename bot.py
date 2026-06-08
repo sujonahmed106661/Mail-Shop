@@ -686,6 +686,7 @@ BTN_ADM_SETTINGS      = _b("⚙️ Settings")
 BTN_ADM_EXPORT        = _b("📤 Export Mail Orders")
 BTN_ADM_PROXY_PKGS    = _b("📡 Data Packages")
 BTN_ADM_ORDER_LOOKUP  = _b("🔍 Order Lookup")
+BTN_ADM_ANALYTICS     = _b("📈 Analytics")
 BTN_PKG_ADD           = _b("➕ Add Package")
 
 # ── Admin product actions ──────────────────────────────────────────
@@ -1244,6 +1245,73 @@ async def get_dashboard_stats() -> dict:
         ),
     }
 
+
+async def get_analytics_data() -> dict:
+    users, orders, vpn, proxy, products = await asyncio.gather(
+        db_get("users"), db_get("orders"),
+        db_get("vpn_orders"), db_get("proxy_orders"), db_get("products"),
+    )
+    orders = orders or {}
+    vpn = vpn or {}
+    proxy = proxy or {}
+    users = users or {}
+    products = products or {}
+
+    now = int(time.time())
+    today_start = now - (now % 86400)
+    week_start = now - 7 * 86400
+    month_start = now - 30 * 86400
+
+    all_orders = []
+    for v in orders.values():
+        all_orders.append((v.get("created_at", 0), v.get("total_price", 0)))
+    for v in vpn.values():
+        if v.get("status") == "delivered":
+            all_orders.append((v.get("created_at", 0), v.get("price", 0)))
+    for v in proxy.values():
+        if v.get("status") == "delivered":
+            all_orders.append((v.get("created_at", 0), v.get("price", 0)))
+
+    today_rev = 0.0
+    today_count = 0
+    week_rev = 0.0
+    week_count = 0
+    month_rev = 0.0
+    month_count = 0
+
+    for created_at, price in all_orders:
+        if created_at >= today_start:
+            today_rev += price
+            today_count += 1
+        if created_at >= week_start:
+            week_rev += price
+            week_count += 1
+        if created_at >= month_start:
+            month_rev += price
+            month_count += 1
+
+    top_products = sorted(
+        [(k, v.get("name", k), v.get("total_sold", 0)) for k, v in products.items()],
+        key=lambda x: x[2], reverse=True,
+    )[:5]
+
+    top_buyers = sorted(
+        [(uid, u.get("username", ""), u.get("total_spent", 0)) for uid, u in users.items()],
+        key=lambda x: x[2], reverse=True,
+    )[:5]
+
+    return {
+        "today_rev": round(today_rev, 2),
+        "today_count": today_count,
+        "week_rev": round(week_rev, 2),
+        "week_count": week_count,
+        "month_rev": round(month_rev, 2),
+        "month_count": month_count,
+        "top_products": top_products,
+        "top_buyers": top_buyers,
+    }
+
+
 async def upload_screenshot(file_bytes: bytes, filename: str) -> str:
     def _up():
         b = storage.bucket()
@@ -1737,6 +1805,42 @@ def fmt_admin_dashboard(stats: dict) -> str:
         f"📦 Pending Orders: <b>{stats['pending_orders']}</b>"
     )
 
+
+def fmt_analytics(data: dict) -> str:
+    lines = [
+        f"📈 <b>Sales Analytics</b>\n{_SEP}",
+        "",
+        f"<b>Today</b>",
+        f"  💵 Revenue: <b>${data['today_rev']:.2f}</b>",
+        f"  🛍 Orders: <b>{data['today_count']}</b>",
+        "",
+        f"<b>This Week (7 days)</b>",
+        f"  💵 Revenue: <b>${data['week_rev']:.2f}</b>",
+        f"  🛍 Orders: <b>{data['week_count']}</b>",
+        "",
+        f"<b>This Month (30 days)</b>",
+        f"  💵 Revenue: <b>${data['month_rev']:.2f}</b>",
+        f"  🛍 Orders: <b>{data['month_count']}</b>",
+        "",
+        f"{_SEP}",
+        f"<b>Top 5 Products</b>",
+    ]
+    if data["top_products"]:
+        for i, (_, name, sold) in enumerate(data["top_products"], 1):
+            lines.append(f"  {i}. {name} - <b>{sold}</b> sold")
+    else:
+        lines.append("  No product data.")
+    lines.append("")
+    lines.append(f"<b>Top 5 Buyers</b>")
+    if data["top_buyers"]:
+        for i, (uid, uname, spent) in enumerate(data["top_buyers"], 1):
+            display = f"@{uname}" if uname else f"<code>{uid}</code>"
+            lines.append(f"  {i}. {display} - <b>${spent:.2f}</b>")
+    else:
+        lines.append("  No buyer data.")
+    return "\n".join(lines)
+
+
 def fmt_admin_deposit_review(d: dict) -> str:
     return (
         f"💳 <b>Deposit Request</b>\n{_SEP}\n"
@@ -2142,7 +2246,8 @@ def admin_main_kb() -> ReplyKeyboardMarkup:
         [BTN_ADM_VPN_ORDERS,   BTN_ADM_PROXY_ORDERS],
         [BTN_ADM_COUPONS,      BTN_ADM_BROADCAST],
         [BTN_ADM_PROXY_PKGS,   BTN_ADM_EXPORT],
-        [BTN_ADM_ORDER_LOOKUP, BTN_ADM_SETTINGS],
+        [BTN_ADM_ANALYTICS,    BTN_ADM_ORDER_LOOKUP],
+        [BTN_ADM_SETTINGS],
         [HOME_BTN],
     )
 
@@ -6758,6 +6863,14 @@ async def _back_to_coupons(message: Message, state: FSMContext):
     await state.update_data(coupons=coupons, coupons_dm=dm)
     await state.set_state(AdminFlow.coupons_list)
     await message.answer("🎟 <b>Coupons</b>", reply_markup=admin_coupons_kb(coupons))
+
+
+# ── Analytics ──────────────────────────────────────────────────────
+
+@router_admin.message(AdminFlow.menu, F.text == BTN_ADM_ANALYTICS)
+async def admin_analytics(message: Message):
+    data = await get_analytics_data()
+    await message.answer(fmt_analytics(data), reply_markup=admin_main_kb())
 
 
 # ── Order Lookup ───────────────────────────────────────────────────
