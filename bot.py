@@ -1912,30 +1912,6 @@ def _status_dot(is_online: bool) -> str:
     return "\U0001F7E2" if is_online else "\U0001F534"
 
 
-def _inline_row(*buttons: tuple) -> List[InlineKeyboardButton]:
-    """Build a row of InlineKeyboardButtons from (text, callback_data) tuples."""
-    return [InlineKeyboardButton(text=t, callback_data=d) for t, d in buttons]
-
-
-def _paginate_inline(items: list, page: int, per_page: int, prefix: str) -> InlineKeyboardMarkup:
-    """Create paginated inline keyboard from items list.
-    Each item should be (display_text, callback_data).
-    """
-    start = page * per_page
-    end = start + per_page
-    page_items = items[start:end]
-    rows = [[InlineKeyboardButton(text=txt, callback_data=cb)] for txt, cb in page_items]
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="\u25C0 Prev", callback_data=f"{prefix}:page:{page - 1}"))
-    total_pages = (len(items) + per_page - 1) // per_page
-    if page < total_pages - 1:
-        nav.append(InlineKeyboardButton(text="Next \u25B6", callback_data=f"{prefix}:page:{page + 1}"))
-    if nav:
-        rows.append(nav)
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 def _quick_actions_inline(actions: list) -> InlineKeyboardMarkup:
     """Generate quick-action button rows from list of (text, callback_data) tuples."""
     rows = []
@@ -2453,7 +2429,6 @@ class UserFlow(StatesGroup):
     search_services      = State()
     order_tracking       = State()
     user_stats           = State()
-    repeat_order_confirm = State()
 
 class AdminFlow(StatesGroup):
     menu              = State()
@@ -3034,19 +3009,7 @@ async def send_main_menu(message: Message, state: FSMContext, text: Optional[str
     balance   = user.get("balance", 0)
     first_name = user.get("first_name", message.from_user.first_name)
     display = text or fmt_welcome(shop_name, welcome, first_name, balance, user)
-    # Quick access inline shortcuts
-    quick_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="\U0001F4E8 Buy Mail", callback_data="nav_mail"),
-            InlineKeyboardButton(text="\U0001F4B0 Balance", callback_data="nav_balance"),
-        ],
-        [
-            InlineKeyboardButton(text="\U0001F4CB History", callback_data="nav_history"),
-            InlineKeyboardButton(text="\U0001F3E0 Home", callback_data="nav_home"),
-        ],
-    ])
     await message.answer(display, reply_markup=main_menu_kb())
-    await message.answer("\u26A1 <b>Quick Navigation</b>", reply_markup=quick_kb)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3064,155 +3027,6 @@ async def go_home(message: Message, state: FSMContext):
         await message.answer("🔐 <b>Admin Panel</b>", reply_markup=admin_main_kb())
         return
     await send_main_menu(message, state)
-
-
-# ── Inline Navigation Callbacks ────────────────────────────────────
-
-@router_global.callback_query(F.data == "nav_home")
-async def nav_home_cb(callback: CallbackQuery, state: FSMContext):
-    await send_main_menu(callback.message, state, user_id=callback.from_user.id)
-    await callback.answer()
-
-
-@router_global.callback_query(F.data == "nav_balance")
-async def nav_balance_cb(callback: CallbackQuery, state: FSMContext):
-    user = await get_user(callback.from_user.id) or {}
-    await callback.message.answer(fmt_balance_screen(user), reply_markup=main_menu_kb())
-    await callback.answer()
-
-
-@router_global.callback_query(F.data == "nav_mail")
-async def nav_mail_cb(callback: CallbackQuery, state: FSMContext):
-    products = await get_all_products()
-    _mail_emoji = "\U0001F4EE"
-    dm = {
-        f"{_status_dot(p.get('status','online')=='online')} {p.get('emoji', _mail_emoji)} {p['name']}  \u00B7  ${p['price']:.2f}  \u00B7  {p.get('stock_count',0)} left": pid
-        for pid, p in products.items()
-        if p.get("category", "mail") == "mail" and not p.get("hidden")
-    }
-    if not dm:
-        await callback.answer("No mail products available.", show_alert=True)
-        return
-    await state.update_data(dm=dm)
-    await state.set_state(UserFlow.mail_product)
-    await callback.message.answer(
-        fmt_product_list_header("\U0001F4EE Mail Products", len(dm)),
-        reply_markup=products_kb(dm),
-    )
-    await callback.answer()
-
-
-@router_global.callback_query(F.data == "nav_history")
-async def nav_history_cb(callback: CallbackQuery, state: FSMContext):
-    uid = callback.from_user.id
-    mail_o, vpn_o, proxy_o = await asyncio.gather(
-        get_user_orders(uid), get_user_vpn_orders(uid), get_user_proxy_orders(uid),
-    )
-    await callback.message.answer(fmt_order_history(mail_o, vpn_o, proxy_o), reply_markup=main_menu_kb())
-    # Paginated order inline
-    all_orders = []
-    for o in (mail_o or [])[:5]:
-        all_orders.append((
-            f"\U0001F4EE {o['product_name']} x{o['qty']} - ${o['total_price']:.2f}",
-            f"order_detail:mail:{o['order_id']}",
-        ))
-    for o in (vpn_o or [])[:3]:
-        all_orders.append((
-            f"\U0001F310 {o['product_name']} {o['duration_days']}d - ${o['price']:.2f}",
-            f"order_detail:vpn:{o['order_id']}",
-        ))
-    for o in (proxy_o or [])[:3]:
-        all_orders.append((
-            f"\U0001F510 {o['product_name']} - ${o['price']:.2f}",
-            f"order_detail:proxy:{o['order_id']}",
-        ))
-    if all_orders:
-        paginated_kb = _paginate_inline(all_orders, 0, 5, "orders")
-        await callback.message.answer("\U0001F4C4 <b>Tap to expand details:</b>", reply_markup=paginated_kb)
-    await callback.answer()
-
-
-@router_global.callback_query(F.data == "nav_admin")
-async def nav_admin_cb(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("\U0001F6AB Access denied", show_alert=True)
-        return
-    await state.set_state(AdminFlow.menu)
-    await callback.message.answer("\U0001F510 <b>Admin Panel</b>", reply_markup=admin_main_kb())
-    await callback.answer()
-
-
-@router_global.callback_query(F.data == "nav_deposit")
-async def nav_deposit_cb(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(UserFlow.dep_method)
-    await callback.message.answer(
-        "\U0001F4B3 <b>Deposit</b>\nSelect a deposit method from the menu.",
-        reply_markup=deposit_method_kb(),
-    )
-    await callback.answer()
-
-
-@router_global.callback_query(F.data.startswith("orders:page:"))
-async def nav_orders_page_cb(callback: CallbackQuery, state: FSMContext):
-    page = int(callback.data.split(":")[-1])
-    uid = callback.from_user.id
-    mail_o, vpn_o, proxy_o = await asyncio.gather(
-        get_user_orders(uid), get_user_vpn_orders(uid), get_user_proxy_orders(uid),
-    )
-    all_orders = []
-    for o in (mail_o or [])[:10]:
-        all_orders.append((
-            f"\U0001F4EE {o['product_name']} x{o['qty']} - ${o['total_price']:.2f}",
-            f"order_detail:mail:{o['order_id']}",
-        ))
-    for o in (vpn_o or [])[:5]:
-        all_orders.append((
-            f"\U0001F310 {o['product_name']} {o['duration_days']}d - ${o['price']:.2f}",
-            f"order_detail:vpn:{o['order_id']}",
-        ))
-    for o in (proxy_o or [])[:5]:
-        all_orders.append((
-            f"\U0001F510 {o['product_name']} - ${o['price']:.2f}",
-            f"order_detail:proxy:{o['order_id']}",
-        ))
-    if all_orders:
-        paginated_kb = _paginate_inline(all_orders, page, 5, "orders")
-        try:
-            await callback.message.edit_reply_markup(reply_markup=paginated_kb)
-        except Exception:
-            pass
-    await callback.answer()
-
-
-@router_global.callback_query(F.data.startswith("order_detail:"))
-async def nav_order_detail_cb(callback: CallbackQuery):
-    parts = callback.data.split(":", 2)
-    if len(parts) < 3:
-        await callback.answer("Invalid order", show_alert=True)
-        return
-    otype, oid = parts[1], parts[2]
-    uid = callback.from_user.id
-    detail_text = f"\U0001F4CB <b>Order Details</b>\n{_LINE}\nOrder: <code>{oid}</code>\nType: {otype.upper()}"
-    repeat_btn = []
-    if otype == "mail":
-        orders = await get_user_orders(uid)
-        for o in orders:
-            if o.get("order_id") == oid:
-                detail_text = (
-                    f"\U0001F4CB <b>Order Details</b>\n{_LINE}\n"
-                    f"ID: <code>{o['order_id']}</code>\n"
-                    f"Product: {o['product_name']}\n"
-                    f"Qty: {o['qty']} | Total: ${o['total_price']:.2f}\n"
-                    f"Date: {_dt(o.get('created_at', int(time.time())))}"
-                )
-                repeat_btn = [[InlineKeyboardButton(
-                    text="\U0001F501 Repeat Order",
-                    callback_data=f"repeat_order:mail:{oid}",
-                )]]
-                break
-    detail_kb = InlineKeyboardMarkup(inline_keyboard=repeat_btn) if repeat_btn else None
-    await callback.message.answer(detail_text, reply_markup=detail_kb)
-    await callback.answer()
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3427,16 +3241,6 @@ async def cmd_start(message: Message, state: FSMContext):
 async def show_balance(message: Message):
     user = await get_user(message.from_user.id) or {}
     await message.answer(fmt_balance_screen(user), reply_markup=main_menu_kb())
-    # Live statistics widget
-    total_spent = user.get("total_spent", 0)
-    order_count = user.get("order_count", 0)
-    stat_line = f"\U0001F4CA <i>Stats: {order_count} orders | ${total_spent:.2f} spent</i>"
-    balance_actions = _quick_actions_inline([
-        ("\U0001F4B3 Deposit", "nav_deposit"),
-        ("\U0001F6D2 Shop", "nav_mail"),
-        ("\U0001F4CB History", "nav_history"),
-    ])
-    await message.answer(stat_line, reply_markup=balance_actions)
 
 
 @router_start.message(F.text == BTN_REFERRAL)
@@ -3867,51 +3671,6 @@ async def order_history(message: Message):
         get_user_orders(uid), get_user_vpn_orders(uid), get_user_proxy_orders(uid),
     )
     await message.answer(fmt_order_history(mail_o, vpn_o, proxy_o), reply_markup=main_menu_kb())
-    # Paginated order details inline
-    all_orders = []
-    for o in (mail_o or [])[:8]:
-        all_orders.append((
-            f"\U0001F4EE {o['product_name']} x{o['qty']} - ${o['total_price']:.2f}",
-            f"order_detail:mail:{o['order_id']}",
-        ))
-    for o in (vpn_o or [])[:4]:
-        all_orders.append((
-            f"\U0001F310 {o['product_name']} {o['duration_days']}d - ${o['price']:.2f}",
-            f"order_detail:vpn:{o['order_id']}",
-        ))
-    for o in (proxy_o or [])[:4]:
-        all_orders.append((
-            f"\U0001F510 {o['product_name']} - ${o['price']:.2f}",
-            f"order_detail:proxy:{o['order_id']}",
-        ))
-    # Inline buttons for repeat order and order tracking
-    inline_buttons = []
-    if mail_o:
-        o = mail_o[0]
-        inline_buttons.append([InlineKeyboardButton(
-            text=f"\U0001F501 Repeat: {o['product_name']} x{o['qty']}",
-            callback_data=f"repeat_order:mail:{o['order_id']}",
-        )])
-    for o in (vpn_o or [])[:2]:
-        if o.get("status") == "pending":
-            inline_buttons.append([InlineKeyboardButton(
-                text=f"\U0001F4E6 Track: {o['order_id']}",
-                callback_data=f"track_order:vpn:{o['order_id']}",
-            )])
-    for o in (proxy_o or [])[:2]:
-        if o.get("status") == "pending":
-            inline_buttons.append([InlineKeyboardButton(
-                text=f"\U0001F4E6 Track: {o['order_id']}",
-                callback_data=f"track_order:proxy:{o['order_id']}",
-            )])
-    if all_orders:
-        paginated_kb = _paginate_inline(all_orders, 0, 5, "orders")
-        await message.answer("\U0001F4C4 <b>Tap to expand order details:</b>", reply_markup=paginated_kb)
-    elif inline_buttons:
-        await message.answer(
-            "\u26A1 <b>Quick Actions</b>",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_buttons),
-        )
     deposits = await get_user_deposits(uid)
     if deposits:
         await message.answer(fmt_deposit_history(deposits))
@@ -4023,164 +3782,33 @@ async def show_favorites(message: Message, state: FSMContext):
     fav_pids = await get_user_favorites(uid)
     if not fav_pids:
         await message.answer(
-            f"⭐ <b>My Favorites</b>\n{_SEP}\n"
+            f"\u2B50 <b>My Favorites</b>\n{_SEP}\n"
             f"You have no favorite products yet.\n\n"
-            f"Browse products and tap the star button to add favorites!",
+            f"Browse products to add favorites!",
             reply_markup=main_menu_kb(),
         )
         return
     products = await get_all_products()
-    lines = [f"⭐ <b>My Favorites</b>\n{_SEP}"]
-    buttons = []
+    lines = [f"\u2B50 <b>My Favorites</b>\n{_SEP}"]
+    found = False
     for pid in fav_pids:
         p = products.get(pid)
         if not p:
             continue
-        status_dot = "🟢" if p.get("status", "online") == "online" else "🔴"
+        found = True
+        status_dot = "\U0001F7E2" if p.get("status", "online") == "online" else "\U0001F534"
         stock = p.get("stock_count", 0)
-        lines.append(f"\n{status_dot} {p.get('emoji','📦')} <b>{p['name']}</b>")
-        lines.append(f"   💰 ${p['price']:.2f} | 📦 {stock} in stock")
-        buttons.append([
-            InlineKeyboardButton(text=f"🛒 Buy {p['name']}", callback_data=f"fav_buy:{pid}"),
-            InlineKeyboardButton(text="❌ Remove", callback_data=f"fav_rm:{pid}"),
-        ])
-    if not buttons:
+        emoji = p.get("emoji", "\U0001F4E6")
+        lines.append(f"\n{status_dot} {emoji} <b>{p['name']}</b>")
+        lines.append(f"   \U0001F4B0 ${p['price']:.2f} | \U0001F4E6 {stock} in stock")
+    if not found:
         await message.answer(
-            f"⭐ <b>My Favorites</b>\n{_SEP}\n"
+            f"\u2B50 <b>My Favorites</b>\n{_SEP}\n"
             f"Your favorited products are no longer available.",
             reply_markup=main_menu_kb(),
         )
         return
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer("\n".join(lines), reply_markup=kb)
-
-
-@router_user_panel.callback_query(F.data.startswith("fav_rm:"))
-async def fav_remove_cb(callback: CallbackQuery):
-    pid = callback.data.split(":", 1)[1]
-    uid = callback.from_user.id
-    await remove_user_favorite(uid, pid)
-    await callback.answer("Removed from favorites!")
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-
-
-@router_user_panel.callback_query(F.data.startswith("fav_buy:"))
-async def fav_buy_cb(callback: CallbackQuery, state: FSMContext):
-    pid = callback.data.split(":", 1)[1]
-    product = await get_product(pid)
-    if not product:
-        await callback.answer("Product not found!", show_alert=True)
-        return
-    cat = product.get("category", "mail")
-    stock = await get_stock_count(pid)
-    if stock == 0 and cat == "mail":
-        await callback.answer("Out of stock!", show_alert=True)
-        return
-    await callback.answer(f"Opening {product['name']}...")
-    # Redirect to the appropriate product flow based on category
-    if cat == "mail":
-        products = await get_all_products()
-        dm = {
-            f"{p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid_
-            for pid_, p in products.items()
-            if p.get("category", "mail") == "mail" and not p.get("hidden")
-        }
-        await state.update_data(dm=dm, pid=pid, product=product, stock=stock)
-        await state.set_state(UserFlow.mail_qty)
-        await callback.message.answer(
-            f"{product.get('emoji','📮')} <b>{product['name']}</b>\n{_SEP}\n"
-            f"💰 Price: <b>${product['price']:.2f}</b>/unit\n"
-            f"📦 In Stock: <b>{stock}</b>\n\n"
-            f"Enter quantity:",
-            reply_markup=input_kb(),
-        )
-    else:
-        await callback.message.answer(
-            f"Please use the main menu to purchase {product['name']}.",
-            reply_markup=main_menu_kb(),
-        )
-
-
-@router_user_panel.callback_query(F.data.startswith("fav_add:"))
-async def fav_add_cb(callback: CallbackQuery):
-    pid = callback.data.split(":", 1)[1]
-    uid = callback.from_user.id
-    await add_user_favorite(uid, pid)
-    await callback.answer("Added to favorites! ⭐", show_alert=True)
-
-
-# ── Restock Notifications ─────────────────────────────────────────
-
-@router_user_panel.callback_query(F.data.startswith("restock_sub:"))
-async def restock_subscribe_cb(callback: CallbackQuery):
-    pid = callback.data.split(":", 1)[1]
-    uid = callback.from_user.id
-    await subscribe_restock(pid, uid)
-    await callback.answer("You'll be notified when this product is restocked! 🔔", show_alert=True)
-
-
-@router_user_panel.callback_query(F.data.startswith("restock_unsub:"))
-async def restock_unsubscribe_cb(callback: CallbackQuery):
-    pid = callback.data.split(":", 1)[1]
-    uid = callback.from_user.id
-    await unsubscribe_restock(pid, uid)
-    await callback.answer("Unsubscribed from restock notifications.", show_alert=True)
-
-
-# ── One-Click Repeat Order ────────────────────────────────────────
-
-@router_user_panel.callback_query(F.data.startswith("repeat_order:"))
-async def repeat_order_cb(callback: CallbackQuery, state: FSMContext):
-    parts = callback.data.split(":", 2)
-    if len(parts) < 3:
-        await callback.answer("Invalid order data.", show_alert=True)
-        return
-    order_type = parts[1]
-    order_id = parts[2]
-    if order_type == "mail":
-        data = await db_get(f"orders/{order_id}")
-        if not data:
-            await callback.answer("Order not found.", show_alert=True)
-            return
-        pid = data.get("product_id")
-        product = await get_product(pid)
-        if not product:
-            await callback.answer("Product no longer exists.", show_alert=True)
-            return
-        stock = await get_stock_count(pid)
-        qty = data.get("qty", 1)
-        if stock < qty:
-            await callback.answer(f"Not enough stock (need {qty}, have {stock}).", show_alert=True)
-            return
-        products = await get_all_products()
-        dm = {
-            f"{p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid_
-            for pid_, p in products.items()
-            if p.get("category", "mail") == "mail" and not p.get("hidden")
-        }
-        total = product["price"] * qty
-        await state.update_data(dm=dm, pid=pid, product=product, stock=stock, qty=qty, total=total)
-        await state.set_state(UserFlow.mail_coupon)
-        await callback.message.answer(
-            f"🔄 <b>Repeat Order</b>\n{_SEP}\n"
-            f"{product.get('emoji','📮')} {product['name']}\n"
-            f"📦 Qty: <b>{qty}</b>\n"
-            f"💰 Total: <b>${total:.2f}</b>\n\n"
-            f"Press Confirm to proceed or Back to cancel.",
-            reply_markup=confirm_kb(),
-        )
-        await callback.answer("Order loaded!")
-    elif order_type == "vpn":
-        data = await db_get(f"vpn_orders/{order_id}")
-        if not data:
-            await callback.answer("Order not found.", show_alert=True)
-            return
-        await callback.answer("Please use Buy VPN from the main menu.", show_alert=True)
-    else:
-        await callback.answer("Please use the main menu to reorder.", show_alert=True)
+    await message.answer("\n".join(lines), reply_markup=main_menu_kb())
 
 
 # ── Advanced Service Search ───────────────────────────────────────
@@ -4222,51 +3850,14 @@ async def search_query(message: Message, state: FSMContext):
             reply_markup=input_kb(),
         )
         return
-    lines = [f"🔍 <b>Search Results</b> for '{html_lib.escape(query)}'\n{_SEP}"]
-    buttons = []
+    lines = [f"\U0001F50D <b>Search Results</b> for '{html_lib.escape(query)}'\n{_SEP}"]
     for pid, p in results[:10]:
-        status_dot = "🟢" if p.get("status", "online") == "online" else "🔴"
+        status_dot = "\U0001F7E2" if p.get("status", "online") == "online" else "\U0001F534"
         stock = p.get("stock_count", 0)
-        lines.append(f"\n{status_dot} {p.get('emoji','📦')} <b>{p['name']}</b>")
-        lines.append(f"   💰 ${p['price']:.2f} | 📦 {stock} in stock")
-        buttons.append([
-            InlineKeyboardButton(text=f"🛒 {p['name']}", callback_data=f"search_buy:{pid}"),
-            InlineKeyboardButton(text="⭐", callback_data=f"fav_add:{pid}"),
-        ])
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer("\n".join(lines), reply_markup=kb)
-
-
-@router_user_panel.callback_query(F.data.startswith("search_buy:"))
-async def search_buy_cb(callback: CallbackQuery, state: FSMContext):
-    pid = callback.data.split(":", 1)[1]
-    product = await get_product(pid)
-    if not product:
-        await callback.answer("Product not found!", show_alert=True)
-        return
-    cat = product.get("category", "mail")
-    if cat == "mail":
-        stock = await get_stock_count(pid)
-        if stock == 0:
-            await callback.answer("Out of stock!", show_alert=True)
-            return
-        products = await get_all_products()
-        dm = {
-            f"{p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid_
-            for pid_, p in products.items()
-            if p.get("category", "mail") == "mail" and not p.get("hidden")
-        }
-        await state.update_data(dm=dm, pid=pid, product=product, stock=stock)
-        await state.set_state(UserFlow.mail_qty)
-        await callback.message.answer(
-            f"{product.get('emoji','📮')} <b>{product['name']}</b>\n{_SEP}\n"
-            f"💰 Price: <b>${product['price']:.2f}</b>/unit\n"
-            f"📦 In Stock: <b>{stock}</b>\n\nEnter quantity:",
-            reply_markup=input_kb(),
-        )
-        await callback.answer()
-    else:
-        await callback.answer(f"Use the main menu to buy {product['name']}.", show_alert=True)
+        emoji = p.get("emoji", "\U0001F4E6")
+        lines.append(f"\n{status_dot} {emoji} <b>{p['name']}</b>")
+        lines.append(f"   \U0001F4B0 ${p['price']:.2f} | \U0001F4E6 {stock} in stock")
+    await message.answer("\n".join(lines), reply_markup=main_menu_kb())
 
 
 # ── Real-time Order Tracking ──────────────────────────────────────
@@ -4496,17 +4087,13 @@ async def mail_product_selected(message: Message, state: FSMContext):
         return
     stock = await get_stock_count(pid)
     if stock == 0:
-        notify_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔔 Notify Me When Restocked", callback_data=f"restock_sub:{pid}")],
-            [InlineKeyboardButton(text="⭐ Add to Favorites", callback_data=f"fav_add:{pid}")],
-        ])
+        emoji = product.get("emoji", "\U0001F4E6")
         await message.answer(
-            f"❌ <b>Out of Stock</b>\n{_SEP}\n"
-            f"{product.get('emoji','📦')} {product['name']} is currently out of stock.\n"
-            f"Tap below to get notified when it's back!",
-            reply_markup=notify_kb,
+            f"\u274C <b>Out of Stock</b>\n{_SEP}\n"
+            f"{emoji} {product['name']} is currently out of stock.\n"
+            f"Please check back later or browse other products.",
+            reply_markup=main_menu_kb(),
         )
-        await message.answer("Use the menu to browse other products.", reply_markup=main_menu_kb())
         await state.clear()
         return
     await state.update_data(pid=pid, product=product, stock=stock)

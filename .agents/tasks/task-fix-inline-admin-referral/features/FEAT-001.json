@@ -1,0 +1,36 @@
+{
+  "id": "FEAT-001",
+  "type": "fix",
+  "description": "Remove ALL user-facing Inline Keyboards and convert navigation to Reply Keyboards. Remove quick navigation inline panel from welcome message, paginated order history inline, repeat order inline buttons, favorites inline buttons, restock notification inline buttons, search results inline buttons, out-of-stock inline buttons, and all nav_ callback handlers. Keep ONLY admin-only approval inline keyboards (deposit_review_inline, order_review_inline) and 2FA inline keyboards (tfa_inline_kb, tfa_nokey_kb) and the force-join inline keyboard (has URL buttons only, no callback). Also keep admin-only inline keyboards for bonus product selection, service status toggle, advanced user search, analytics detail, logs pagination, low stock restock, and admin quick actions since these are admin-exclusive tools. Remove the _inline_row(), _paginate_inline(), _quick_actions_inline() utility functions. Remove InlineKeyboardButton and InlineKeyboardMarkup from imports if no longer needed (but they ARE still needed for admin approval and 2FA buttons).",
+  "status": "in_progress",
+  "steps": [
+    "In bot.py around line 3038-3048: Remove the quick_kb InlineKeyboardMarkup and the second message.answer call that sends 'Quick Navigation' with quick_kb in the send_main_menu function. Keep only the first message.answer with reply_markup=main_menu_kb().",
+    "Remove ALL nav_ callback handlers (lines ~3069-3150): nav_home_cb, nav_balance_cb, nav_mail_cb, nav_history_cb, nav_admin_cb, nav_deposit_cb, nav_orders_page_cb (paginated history), nav_order_detail_cb (order detail). These are the '# Inline Navigation Callbacks' section.",
+    "In order_history handler (around line 3868): Remove the inline buttons section that creates paginated order detail buttons and repeat order buttons (all_orders list, inline_buttons list, InlineKeyboardMarkup creation). The order history should just show the text summary with reply keyboard (main_menu_kb).",
+    "In mail_product_selected handler (around line 4498): Replace out-of-stock InlineKeyboardMarkup (notify_kb with restock_sub and fav_add buttons) with just a plain text message using main_menu_kb(). Users can use the main menu to navigate.",
+    "In favorites handler (around line 4030-4055): Replace InlineKeyboardMarkup with buttons for fav_buy/fav_rm with a simple text-based favorites display using main_menu_kb(). Users browse favorites as text, use main menu to buy.",
+    "In search_query handler (around line 4220-4240): Replace InlineKeyboardMarkup with search_buy/fav_add buttons with just a text list of results using main_menu_kb(). Users see results as text, then use product menu to buy.",
+    "Remove callback handlers that are user-facing only: fav_remove_cb, fav_buy_cb, fav_add_cb, restock_subscribe_cb, restock_unsubscribe_cb, repeat_order_cb, search_buy_cb (lines ~4058-4260).",
+    "Remove the _inline_row helper function (line ~1915-1917) and _paginate_inline (lines ~1920-1936) and _quick_actions_inline (lines ~1939-1948) utility functions since they are no longer used by user-facing code. Check if admin code uses them first - if admin uses them, keep them.",
+    "In the order detail callback handler nav_order_detail_cb (line ~3187): This was already removed with nav_ callbacks in step 2 above.",
+    "Remove the UserFlow.repeat_order_confirm state if it exists (line ~2456) since repeat order inline feature is gone.",
+    "Verify: the Support button with URL-only InlineKeyboard (line ~3857) is acceptable - it opens a URL not a callback, keep it. The force-join channel buttons (line ~3384-3399) use URL buttons too - keep those."
+  ],
+  "acceptance_criteria": [
+    "No InlineKeyboardMarkup or InlineKeyboardButton used for user navigation (no callback_data for nav_, orders:page:, order_detail:, repeat_order:, fav_rm:, fav_buy:, fav_add:, restock_sub:, restock_unsub:, search_buy: in user-facing code)",
+    "Admin approval inlines (dep_ok, dep_no, vpn_ok, vpn_no, proxy_ok, proxy_no) still work",
+    "2FA inline buttons (tfa_refresh, tfa_timer, tfa_setkey) still work",
+    "Force-join and support URL buttons still work",
+    "Admin-only inline keyboards (bonus product selection, service status toggle, advanced search, analytics detail, logs pagination, low stock restock, admin quick actions) all still work",
+    "AST validation passes: python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+    "All user navigation uses Reply Keyboards only"
+  ],
+  "verification": [
+    "python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+    "grep -c 'InlineKeyboardMarkup' bot.py should show fewer occurrences (only admin/2FA/URL-button uses remaining)",
+    "grep 'nav_home\\|nav_balance\\|nav_mail\\|nav_history\\|nav_admin\\|nav_deposit' bot.py should return no matches",
+    "grep 'repeat_order:\\|search_buy:\\|fav_rm:\\|fav_buy:\\|restock_sub:\\|restock_unsub:' bot.py | grep -v 'router_admin\\|adm_' should return no matches for user-facing callbacks"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
