@@ -2482,8 +2482,8 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         [BTN_BUY_VPN,   BTN_BUY_PROXY],
         [BTN_GET_CODE,  BTN_GET_2FA],
         [BTN_HISTORY,   BTN_REFERRAL],
-        [BTN_MORE,      BTN_SUPPORT],
-        [BTN_AI_SUPPORT],
+        [BTN_MORE],
+        [BTN_SUPPORT,   BTN_AI_SUPPORT],
     )
 
 def banned_user_kb() -> ReplyKeyboardMarkup:
@@ -3887,10 +3887,10 @@ async def ai_free_question(message: Message, state: FSMContext):
     if not message.text:
         return
     query = message.text.lower().strip()
-    # Keyword matching
+    # Keyword matching (word-boundary check to avoid substring false positives)
     matched_topic = None
     for keyword, topic in _AI_KEYWORDS.items():
-        if keyword in query:
+        if re.search(rf"\b{re.escape(keyword)}\b", query):
             matched_topic = topic
             break
     if matched_topic and matched_topic in _AI_KEYWORD_ANSWERS:
@@ -3899,10 +3899,9 @@ async def ai_free_question(message: Message, state: FSMContext):
         await message.answer(
             f"\U0001F914 <b>No Match Found</b>\n{_SEP}\n"
             f"Sorry, I couldn't find an answer for your question.\n"
-            f"Please contact our support team for help! \U0001F447",
-            reply_markup=ai_support_kb(),
+            f"Try asking differently or contact our support team! \U0001F447",
+            reply_markup=_kb([BACK_BTN, HOME_BTN]),
         )
-        await state.set_state(UserFlow.ai_support)
 
 
 @router_start.message(F.text == BTN_HISTORY)
