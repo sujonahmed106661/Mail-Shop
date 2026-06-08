@@ -949,7 +949,7 @@ async def add_stock_items(pid: str, items: List[str]) -> int:
             existing[uuid.uuid4().hex[:16]] = cleaned
     await db_set(f"stocks/{pid}", existing)
     count = len(existing)
-    # Only auto-unhide if product was hidden due to empty stock (before == 0)
+    # Always unhide the product when stock is added
     update_data = {"stock_count": count}
     if count > 0:
         update_data["hidden"] = False
@@ -2143,7 +2143,7 @@ def admin_category_kb() -> ReplyKeyboardMarkup:
 
 def admin_products_kb(products: dict) -> ReplyKeyboardMarkup:
     rows = [
-        [f"{p.get('emoji','📦')} {p['name']} {'🙈' if p.get('hidden') else ''}[{p.get('category','mail').upper()}] — ${p['price']:.2f}"]
+        [f"{p.get('emoji','📦')} {p['name']} {'🙈 ' if p.get('hidden') else ''}[{p.get('category','mail').upper()}] — ${p['price']:.2f}"]
         for pid, p in products.items()
     ]
     rows.append([BTN_ADD_PRODUCT])
@@ -2153,7 +2153,7 @@ def admin_products_kb(products: dict) -> ReplyKeyboardMarkup:
 
 def build_admin_products_dm(products: dict) -> dict:
     return {
-        f"{p.get('emoji','📦')} {p['name']} {'🙈' if p.get('hidden') else ''}[{p.get('category','mail').upper()}] — ${p['price']:.2f}": pid
+        f"{p.get('emoji','📦')} {p['name']} {'🙈 ' if p.get('hidden') else ''}[{p.get('category','mail').upper()}] — ${p['price']:.2f}": pid
         for pid, p in products.items()
     }
 
