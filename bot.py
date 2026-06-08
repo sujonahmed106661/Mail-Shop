@@ -657,7 +657,18 @@ BTN_GC_FILTER   = _b("🎯 Filter Mail")
 BTN_GC_CHANGE   = _b("✏️ Change Mail")
 BTN_HISTORY  = _b("📋 Order History")
 BTN_SUPPORT  = _b("🆘 Support")
+BTN_AI_SUPPORT = _b("🤖 AI Support")
 BTN_REFERRAL = _b("🔗 Referral")
+
+# ── AI Support FAQ Topics ──────────────────────────────────────────
+BTN_AI_HOW_BUY     = _b("❓ How to Buy")
+BTN_AI_HOW_DEPOSIT = _b("💳 How to Deposit")
+BTN_AI_STOCK       = _b("📦 Check Stock")
+BTN_AI_REFERRAL    = _b("🔗 Referral Info")
+BTN_AI_ORDERS      = _b("📋 My Orders")
+BTN_AI_2FA         = _b("🔐 2FA Help")
+BTN_AI_MAIL        = _b("📨 Mail Codes")
+BTN_AI_ASK         = _b("💬 Ask a Question")
 BTN_CONFIRM  = _b("✅ Confirm Purchase")
 BTN_COUPON   = _b("🎫 Apply Coupon")
 
@@ -1846,25 +1857,8 @@ _SEP  = "━" * 22
 _LINE = "─" * 22
 
 # ══════════════════════════════════════════════════════════════════
-# UI HELPERS — Dark Theme Card System
+# UI HELPERS
 # ══════════════════════════════════════════════════════════════════
-
-_CARD_W = 24
-
-def _card(title: str, body: str, footer: str = None) -> str:
-    """Dark-theme card using Unicode box-drawing characters."""
-    top = f"\u2554{'═' * _CARD_W}\u2557"
-    mid = f"\u2560{'═' * _CARD_W}\u2563"
-    bot = f"\u255A{'═' * _CARD_W}\u255D"
-    lines = [top, f"\u2551 <b>{title}</b>", mid]
-    for line in body.split("\n"):
-        lines.append(f"\u2551 {line}")
-    if footer:
-        lines.append(mid)
-        for fl in footer.split("\n"):
-            lines.append(f"\u2551 {fl}")
-    lines.append(bot)
-    return "\n".join(lines)
 
 
 def _progress_bar(current: float, maximum: float, width: int = 10) -> str:
@@ -1908,35 +1902,13 @@ def _quick_actions_inline(actions: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _responsive_kb(*items: str, max_cols: int = 2, nav: bool = True) -> ReplyKeyboardMarkup:
-    """Auto-adjust reply keyboard rows: 2-col for short texts, 1-col for long."""
-    rows = []
-    row = []
-    for item in items:
-        if len(item) > 18:
-            if row:
-                rows.append(row)
-                row = []
-            rows.append([item])
-        else:
-            row.append(item)
-            if len(row) >= max_cols:
-                rows.append(row)
-                row = []
-    if row:
-        rows.append(row)
-    if nav:
-        rows.append([BACK_BTN, HOME_BTN])
-    return _kb(*rows)
-
-
 def _dt(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=TZ).strftime("%d %b %Y, %H:%M UTC")
 
 
 def fmt_welcome(shop_name: str, welcome: str, first_name: str, balance: float,
                 user: dict = None) -> str:
-    """Dark-theme styled welcome message with VIP badge and quick stats."""
+    """Clean welcome message with VIP badge and quick stats."""
     tier_name, tier_emoji = ("", "")
     total_spent = 0
     order_count = 0
@@ -1945,14 +1917,15 @@ def fmt_welcome(shop_name: str, welcome: str, first_name: str, balance: float,
         order_count = user.get("order_count", 0)
         tier_name, tier_emoji = get_vip_tier(total_spent)
     vip_badge = f" {tier_emoji} {tier_name}" if tier_name else ""
-    body = (
-        f"{welcome}\n"
-        f"\n"
+    return (
+        f"<b>{shop_name}</b>\n{_SEP}\n"
+        f"{welcome}\n\n"
         f"\U0001F464 <b>{first_name}</b>{vip_badge}\n"
         f"\U0001F4B0 Balance: <code>${balance:.2f}</code>\n"
-        f"\U0001F6D2 Orders: <b>{order_count}</b>  |  \U0001F4C8 Spent: <b>${total_spent:.2f}</b>"
+        f"\U0001F6D2 Orders: <b>{order_count}</b>  |  \U0001F4C8 Spent: <b>${total_spent:.2f}</b>\n"
+        f"{_SEP}\n"
+        f"Status: \u2705 Active"
     )
-    return _card(f"{shop_name}", body)
 
 def fmt_balance_screen(user: dict) -> str:
     banned = "\U0001F6AB Banned" if user.get("is_banned") else "\u2705 Active"
@@ -1966,7 +1939,8 @@ def fmt_balance_screen(user: dict) -> str:
     vip_line = f"{tier_emoji} VIP: <b>{tier_name}</b>\n" if tier_name else ""
     progress = _progress_bar(current, threshold) if next_tier != "Max" else _progress_bar(1, 1)
     member_since = _dt(user.get("joined_at", int(time.time())))
-    body = (
+    return (
+        f"\U0001F4B0 <b>My Balance</b>\n{_SEP}\n"
         f"\U0001F464 <b>{user.get('full_name', 'User')}</b>\n"
         f"\U0001F194 <code>{user.get('user_id', '?')}</code>  @{user.get('username') or 'N/A'}\n"
         f"{vip_line}"
@@ -1982,18 +1956,21 @@ def fmt_balance_screen(user: dict) -> str:
         f"\U0001F4C5 Member: {member_since}\n"
         f"\U0001F7E2 Status: {banned}"
     )
-    return _card("\U0001F4B0 My Balance", body)
 
 def fmt_product_list_header(category_name: str, count: int) -> str:
-    body = f"\U0001F4E6 <b>{count}</b> product(s) available\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nSelect a product below:"
-    return _card(category_name, body)
+    return (
+        f"<b>{category_name}</b>\n{_SEP}\n"
+        f"\U0001F4E6 <b>{count}</b> product(s) available\n"
+        f"Select a product below:"
+    )
 
 def fmt_product_detail(product: dict, stock: int) -> str:
     desc = product.get("description", "").strip()
     desc_line = f"\U0001F4DD {desc}\n" if desc else ""
     status = _status_dot(stock > 0)
     stock_bar = _progress_bar(stock, max(stock, 50), width=8)
-    body = (
+    return (
+        f"{product.get('emoji', chr(0x1F4E6))} <b>{product['name']}</b>\n{_SEP}\n"
         f"{desc_line}"
         f"{status} Status: {'In Stock' if stock > 0 else 'Out of Stock'}\n"
         f"\U0001F4B5 Price: <code>${product['price']:.2f}</code> /account\n"
@@ -2001,13 +1978,13 @@ def fmt_product_detail(product: dict, stock: int) -> str:
         f"{_LINE}\n"
         f"Enter the quantity you want to purchase:"
     )
-    return _card(f"{product.get('emoji', chr(0x1F4E6))} {product['name']}", body)
 
 def fmt_service_detail(product: dict, duration_days: int) -> str:
     price = round(product["price"] * duration_days, 4)
     desc = product.get("description", "").strip()
     desc_line = f"\U0001F4DD {desc}\n" if desc else ""
-    body = (
+    return (
+        f"{product.get('emoji', chr(0x1F310))} <b>{product['name']}</b>\n{_SEP}\n"
         f"{desc_line}"
         f"\U0001F4B5 Price/day: <code>${product['price']:.2f}</code>\n"
         f"\u23F1 Duration: <b>{duration_days} day(s)</b>\n"
@@ -2015,7 +1992,6 @@ def fmt_service_detail(product: dict, duration_days: int) -> str:
         f"{_LINE}\n"
         f"Press \u2705 Confirm Purchase to place your order."
     )
-    return _card(f"{product.get('emoji', chr(0x1F310))} {product['name']}", body)
 
 def fmt_order_summary(product: dict, qty: int, total: float,
                       balance: float, discount_pct: float = 0) -> str:
@@ -2108,8 +2084,11 @@ def fmt_deposit_submitted(dep_id: str, method: str, amount_bdt: float, amount_us
 
 def fmt_order_history(orders: list, vpn: list, proxy: list) -> str:
     if not orders and not vpn and not proxy:
-        body = "You haven't placed any orders.\nBrowse our products to get started!"
-        return _card("\U0001F4ED No Orders Yet", body)
+        return (
+            f"\U0001F4ED <b>No Orders Yet</b>\n{_SEP}\n"
+            f"You haven't placed any orders.\n"
+            f"Browse our products to get started!"
+        )
     lines = []
     if orders:
         lines.append("\U0001F4EE <b>Mail Orders</b>")
@@ -2129,17 +2108,23 @@ def fmt_order_history(orders: list, vpn: list, proxy: list) -> str:
             data_lbl = o.get("duration_days", "-")
             lines.append(f"  <code>{o['order_id']}</code>  {o['product_name']} {data_lbl}  ${o['price']:.2f}  {s}")
     total_orders = len(orders) + len(vpn) + len(proxy)
-    footer = f"\U0001F4CB Total: {total_orders} order(s)"
-    return _card("\U0001F4DC Order History", "\n".join(lines), footer)
+    return (
+        f"\U0001F4DC <b>Order History</b>\n{_SEP}\n"
+        + "\n".join(lines)
+        + f"\n{_SEP}\n\U0001F4CB Total: {total_orders} order(s)"
+    )
 
 def fmt_deposit_history(deposits: list) -> str:
     if not deposits:
-        return _card("\U0001F4B3 No Deposits Yet", "Make your first deposit to start shopping!")
+        return (
+            f"\U0001F4B3 <b>No Deposits Yet</b>\n{_SEP}\n"
+            f"Make your first deposit to start shopping!"
+        )
     lines = []
     for d in deposits[:12]:
         s = {"approved": "\u2705", "rejected": "\u274C"}.get(d["status"], "\u23F3")
         lines.append(f"{s} <code>{d['deposit_id'][:8]}</code>  {d['method']}  {d['amount_bdt']:.0f}BDT  ${d['amount_usd']:.2f}")
-    return _card("\U0001F4B3 Deposit History", "\n".join(lines))
+    return f"\U0001F4B3 <b>Deposit History</b>\n{_SEP}\n" + "\n".join(lines)
 
 def fmt_admin_dashboard(stats: dict) -> str:
     pending_dep = stats.get('pending_deposits', 0)
@@ -2147,7 +2132,8 @@ def fmt_admin_dashboard(stats: dict) -> str:
     alert = ""
     if pending_dep > 0 or pending_ord > 0:
         alert = f"\n\U0001F6A8 <b>ALERTS:</b> {pending_dep} deposits, {pending_ord} orders pending"
-    body = (
+    return (
+        f"\U0001F4CA <b>Admin Dashboard</b>\n{_SEP}\n"
         f"\U0001F465 Users: <b>{stats['total_users']}</b>\n"
         f"\U0001F4B5 Revenue: <code>${stats['total_revenue']:.2f}</code>\n"
         f"\U0001F6D2 Sales: <b>{stats['total_sales']}</b>\n"
@@ -2156,11 +2142,9 @@ def fmt_admin_dashboard(stats: dict) -> str:
         f"\U0001F4E6 Pending Orders: <b>{pending_ord}</b>"
         f"{alert}"
     )
-    return _card("\U0001F4CA Admin Dashboard", body)
 
 
 def fmt_analytics(data: dict) -> str:
-    # Build sparkline from daily revenue hints if available
     body_lines = [
         f"<b>Today</b>",
         f"  \U0001F4B5 Revenue: <code>${data['today_rev']:.2f}</code>",
@@ -2188,7 +2172,7 @@ def fmt_analytics(data: dict) -> str:
     else:
         top_buyers_lines.append("  No buyer data.")
     body = "\n".join(body_lines + top_products_lines + top_buyers_lines)
-    return _card("\U0001F4C8 Sales Analytics", body)
+    return f"\U0001F4C8 <b>Sales Analytics</b>\n{_SEP}\n{body}"
 
 
 def fmt_admin_deposit_review(d: dict) -> str:
@@ -2414,6 +2398,9 @@ class UserFlow(StatesGroup):
     order_tracking       = State()
     user_stats           = State()
     more_menu            = State()
+    # AI Support flow
+    ai_support           = State()
+    ai_support_ask       = State()
 
 class AdminFlow(StatesGroup):
     menu              = State()
@@ -2496,6 +2483,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         [BTN_GET_CODE,  BTN_GET_2FA],
         [BTN_HISTORY,   BTN_REFERRAL],
         [BTN_MORE,      BTN_SUPPORT],
+        [BTN_AI_SUPPORT],
     )
 
 def banned_user_kb() -> ReplyKeyboardMarkup:
@@ -2505,6 +2493,15 @@ def more_menu_kb() -> ReplyKeyboardMarkup:
     return _kb(
         [BTN_TRENDING,  BTN_FAVORITES],
         [BTN_SEARCH,    BTN_MY_STATS],
+        [BACK_BTN, HOME_BTN],
+    )
+
+def ai_support_kb() -> ReplyKeyboardMarkup:
+    return _kb(
+        [BTN_AI_HOW_BUY,     BTN_AI_HOW_DEPOSIT],
+        [BTN_AI_STOCK,       BTN_AI_REFERRAL],
+        [BTN_AI_ORDERS,      BTN_AI_2FA],
+        [BTN_AI_MAIL,        BTN_AI_ASK],
         [BACK_BTN, HOME_BTN],
     )
 
@@ -3704,6 +3701,208 @@ async def show_support(message: Message):
             [InlineKeyboardButton(text=f"🆘 Contact {display}", url=support_url)]
         ]),
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+# AI SUPPORT HANDLER
+# ══════════════════════════════════════════════════════════════════
+
+_AI_FAQ = {
+    BTN_AI_HOW_BUY: (
+        "\u2753 <b>How to Buy</b>\n" + _SEP + "\n"
+        "1. Choose a category from the main menu (Get Mail, Buy VPN, Buy Proxy)\n"
+        "2. Select the product you want\n"
+        "3. Enter the quantity\n"
+        "4. Optionally apply a coupon code\n"
+        "5. Press \u2705 Confirm Purchase\n"
+        "6. Your accounts will be delivered instantly!\n\n"
+        "Make sure you have enough balance before purchasing."
+    ),
+    BTN_AI_HOW_DEPOSIT: (
+        "\U0001F4B3 <b>How to Deposit</b>\n" + _SEP + "\n"
+        "1. Press \U0001F4B3 Deposit from the main menu\n"
+        "2. Choose a payment method (bKash, Nagad, or Binance)\n"
+        "3. Send the amount to the displayed number/UID\n"
+        "4. Enter the amount you sent\n"
+        "5. Provide your Transaction ID\n"
+        "6. Wait for admin approval (usually 5-30 minutes)\n\n"
+        "Your balance will be credited automatically once approved."
+    ),
+    BTN_AI_STOCK: (
+        "\U0001F4E6 <b>Check Stock</b>\n" + _SEP + "\n"
+        "To check available stock:\n"
+        "1. Go to \U0001F4E8 Get Mail, \U0001F6E1 Buy VPN, or \U0001F30D Buy Proxy\n"
+        "2. Select any product to see current stock count\n"
+        "3. Green dot = In Stock, Red dot = Out of Stock\n\n"
+        "Stock is updated in real-time. If a product is out of stock, "
+        "check back later or contact support."
+    ),
+    BTN_AI_REFERRAL: (
+        "\U0001F517 <b>Referral Info</b>\n" + _SEP + "\n"
+        "Share your referral link with friends!\n"
+        "1. Press \U0001F517 Referral from the main menu\n"
+        "2. Copy your unique referral link\n"
+        "3. Share it with friends\n"
+        "4. When they join and make purchases, you earn bonus balance!\n\n"
+        "The more friends you invite, the more you earn."
+    ),
+    BTN_AI_ORDERS: (
+        "\U0001F4CB <b>My Orders</b>\n" + _SEP + "\n"
+        "To view your order history:\n"
+        "1. Press \U0001F4CB Order History from the main menu\n"
+        "2. You'll see all your Mail, VPN, and Proxy orders\n"
+        "3. Each order shows the product, quantity, and price\n\n"
+        "For VPN/Proxy orders, status indicators:\n"
+        "\u2705 = Delivered  |  \u23F3 = Pending  |  \u274C = Cancelled"
+    ),
+    BTN_AI_2FA: (
+        "\U0001F510 <b>2FA Help</b>\n" + _SEP + "\n"
+        "Two-Factor Authentication (2FA) codes:\n"
+        "1. Press \U0001F510 Get 2FA from the main menu\n"
+        "2. Enter or paste your TOTP secret key\n"
+        "3. The bot generates a 6-digit code valid for 30 seconds\n\n"
+        "This works like Google Authenticator but directly in Telegram. "
+        "Keep your secret keys safe!"
+    ),
+    BTN_AI_MAIL: (
+        "\U0001F4E8 <b>Mail Codes</b>\n" + _SEP + "\n"
+        "To receive mail verification codes:\n"
+        "1. Press \U0001F4F2 Get Code from the main menu\n"
+        "2. Set your email address first (\U0001F4E7 Set Mail)\n"
+        "3. Use \U0001F4EC Get Codes to check for new codes\n"
+        "4. Use \U0001F4E5 Read Inbox to see all messages\n"
+        "5. Use \U0001F3AF Filter Mail to find specific emails\n\n"
+        "Your mailbox refreshes automatically. You can also use "
+        "\U0001F559 Temp Mail for disposable addresses."
+    ),
+}
+
+_AI_KEYWORDS = {
+    "buy": "buy", "purchase": "buy", "order": "buy", "how to buy": "buy",
+    "deposit": "deposit", "payment": "deposit", "bkash": "deposit",
+    "nagad": "deposit", "binance": "deposit", "pay": "deposit", "add money": "deposit",
+    "stock": "stock", "available": "stock", "out of stock": "stock",
+    "referral": "referral", "invite": "referral", "link": "referral", "refer": "referral",
+    "vip": "vip", "badge": "vip", "level": "vip", "tier": "vip",
+    "2fa": "2fa", "totp": "2fa", "authenticator": "2fa", "two factor": "2fa",
+    "mail": "mail", "code": "mail", "inbox": "mail", "email": "mail",
+    "vpn": "vpn", "proxy": "proxy",
+}
+
+_AI_KEYWORD_ANSWERS = {
+    "buy": (
+        "\U0001F6D2 <b>Buying Process</b>\n" + _SEP + "\n"
+        "Select a category (Get Mail, Buy VPN, Buy Proxy) from the main menu, "
+        "pick a product, enter quantity, and confirm. Make sure your balance is sufficient!"
+    ),
+    "deposit": (
+        "\U0001F4B3 <b>Deposit Info</b>\n" + _SEP + "\n"
+        "Press Deposit, choose bKash/Nagad/Binance, send money to the displayed number, "
+        "then enter the amount and transaction ID. Admin will approve within 5-30 minutes."
+    ),
+    "stock": (
+        "\U0001F4E6 <b>Stock Info</b>\n" + _SEP + "\n"
+        "Go to any product category and select a product to see real-time stock. "
+        "Green dot means available, red dot means out of stock."
+    ),
+    "referral": (
+        "\U0001F517 <b>Referral System</b>\n" + _SEP + "\n"
+        "Press Referral in the main menu to get your unique link. "
+        "Share it with friends - when they join and buy, you earn bonus balance!"
+    ),
+    "vip": (
+        "\U0001F451 <b>VIP System</b>\n" + _SEP + "\n"
+        "Your VIP tier is based on total spending. Higher tiers unlock badges "
+        "and exclusive benefits. Check your balance screen to see your progress!"
+    ),
+    "2fa": (
+        "\U0001F510 <b>2FA Codes</b>\n" + _SEP + "\n"
+        "Press Get 2FA, enter your TOTP secret key, and get a 6-digit code. "
+        "Works just like Google Authenticator!"
+    ),
+    "mail": (
+        "\U0001F4E8 <b>Mail System</b>\n" + _SEP + "\n"
+        "Use Get Code to set your email, then check codes and inbox. "
+        "Use Temp Mail for disposable email addresses."
+    ),
+    "vpn": (
+        "\U0001F6E1 <b>VPN Service</b>\n" + _SEP + "\n"
+        "Press Buy VPN, select a VPN product, choose duration (1/7/30/90 days), "
+        "and confirm your purchase. Delivery is handled by our team."
+    ),
+    "proxy": (
+        "\U0001F30D <b>Proxy Service</b>\n" + _SEP + "\n"
+        "Press Buy Proxy, select a proxy product, choose data package, "
+        "and confirm. Our team will deliver your proxy details."
+    ),
+}
+
+
+@router_start.message(F.text == BTN_AI_SUPPORT)
+async def show_ai_support(message: Message, state: FSMContext):
+    await state.set_state(UserFlow.ai_support)
+    await message.answer(
+        f"\U0001F916 <b>AI Support</b>\n{_SEP}\n"
+        f"Choose a topic below to get instant help,\n"
+        f"or press \U0001F4AC Ask a Question to type your query.",
+        reply_markup=ai_support_kb(),
+    )
+
+
+@router_start.message(UserFlow.ai_support, F.text.in_(_AI_FAQ.keys()))
+async def ai_faq_answer(message: Message, state: FSMContext):
+    answer = _AI_FAQ[message.text]
+    await message.answer(answer, reply_markup=ai_support_kb())
+
+
+@router_start.message(UserFlow.ai_support, F.text == BTN_AI_ASK)
+async def ai_ask_question(message: Message, state: FSMContext):
+    await state.set_state(UserFlow.ai_support_ask)
+    await message.answer(
+        f"\U0001F4AC <b>Ask a Question</b>\n{_SEP}\n"
+        f"Type your question below and I'll try to help!\n"
+        f"Examples: \"How do I buy?\", \"How to deposit?\", \"VIP info\"",
+        reply_markup=_kb([BACK_BTN, HOME_BTN]),
+    )
+
+
+@router_start.message(UserFlow.ai_support, F.text == BACK_BTN)
+async def ai_support_back(message: Message, state: FSMContext):
+    await send_main_menu(message, state)
+
+
+@router_start.message(UserFlow.ai_support_ask, F.text == BACK_BTN)
+async def ai_support_ask_back(message: Message, state: FSMContext):
+    await state.set_state(UserFlow.ai_support)
+    await message.answer(
+        f"\U0001F916 <b>AI Support</b>\n{_SEP}\n"
+        f"Choose a topic below to get instant help,\n"
+        f"or press \U0001F4AC Ask a Question to type your query.",
+        reply_markup=ai_support_kb(),
+    )
+
+
+@router_start.message(UserFlow.ai_support_ask)
+async def ai_free_question(message: Message, state: FSMContext):
+    if not message.text:
+        return
+    query = message.text.lower().strip()
+    # Keyword matching
+    matched_topic = None
+    for keyword, topic in _AI_KEYWORDS.items():
+        if keyword in query:
+            matched_topic = topic
+            break
+    if matched_topic and matched_topic in _AI_KEYWORD_ANSWERS:
+        await message.answer(_AI_KEYWORD_ANSWERS[matched_topic], reply_markup=_kb([BACK_BTN, HOME_BTN]))
+    else:
+        await message.answer(
+            f"\U0001F914 <b>No Match Found</b>\n{_SEP}\n"
+            f"Sorry, I couldn't find an answer for your question.\n"
+            f"Please contact our support team for help! \U0001F447",
+            reply_markup=ai_support_kb(),
+        )
+        await state.set_state(UserFlow.ai_support)
 
 
 @router_start.message(F.text == BTN_HISTORY)
@@ -5813,7 +6012,7 @@ async def admin_dashboard(message: Message):
             emoji = p.get("emoji", _pkg_emoji)
             low_items.append(f"  {stock_dot} {emoji} {p.get('name', pid)}: <b>{count}</b>")
     if low_items:
-        alert_text = _card("\U0001F6A8 Low Stock Alert", f"Threshold: {threshold}\n" + "\n".join(low_items[:10]))
+        alert_text = f"\U0001F6A8 <b>Low Stock Alert</b>\n{_SEP}\nThreshold: {threshold}\n" + "\n".join(low_items[:10])
         await message.answer(alert_text)
 
 
@@ -5846,7 +6045,7 @@ async def adm_quick_stock_cb(callback: CallbackQuery):
         emoji = p.get("emoji", _pkg_e)
         lines.append(f"{dot} {emoji} {p.get('name', pid)}: <b>{count}</b> {bar}")
     body = "\n".join(lines[:15]) if lines else "No products."
-    await callback.message.answer(_card("\U0001F4E6 Stock Overview", body))
+    await callback.message.answer(f"\U0001F4E6 <b>Stock Overview</b>\n{_SEP}\n{body}")
     await callback.answer()
 
 

@@ -1,0 +1,24 @@
+{
+  "project_type": "Telegram Bot (aiogram 3.x + Firebase RTDB)",
+  "language": "Python 3.11",
+  "build_system": "pip install from requirements.txt, deployed via Railway (Procfile)",
+  "test_framework": "No test framework; syntax validation via AST parse",
+  "build_command": "python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+  "test_command": "python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+  "verification_instructions": "Run python3 -c \"import ast; ast.parse(open('bot.py').read())\" to verify no syntax errors",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "pip install -r requirements.txt (only needed for import validation)",
+  "environment_constraints": "OPEN_INTERNET - full network access. Single-file bot (bot.py, 9248 lines).",
+  "contribution_requirements": "All code in bot.py. Reply Keyboard only for users. No inline keyboards for user navigation.",
+  "key_patterns": {
+    "buttons": "All button texts use _b() helper for Unicode bold conversion",
+    "keyboards": "_kb() wraps ReplyKeyboardMarkup construction; rows are lists of button texts",
+    "formatters": "fmt_* functions format messages. Currently some use _card() (box-drawing) which needs to be replaced with simple _SEP-based formatting",
+    "states": "UserFlow and AdminFlow StatesGroup classes define FSM states",
+    "handlers": "router_start for user handlers, router_admin for admin handlers, router_global for Home button",
+    "separator": "_SEP = '━' * 22 is the standard separator; _LINE = '─' * 22 for sub-separators",
+    "settings": "SETTINGS_MAP dict maps button text to (key, type, prompt); SETTINGS_CATEGORIES groups them into sub-categories"
+  },
+  "relevant_files": ["bot.py"],
+  "directory_structure": "Single-file project: bot.py is the entire application. requirements.txt for deps. Procfile/railway.toml for deployment."
+}
