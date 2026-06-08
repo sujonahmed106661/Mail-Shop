@@ -666,6 +666,7 @@ BTN_TRENDING    = _b("🔥 Trending")
 BTN_FAVORITES   = _b("⭐ Favorites")
 BTN_MY_STATS    = _b("📊 My Stats")
 BTN_SEARCH      = _b("🔍 Search")
+BTN_MORE        = _b("📂 More")
 
 # ── Duration ───────────────────────────────────────────────────────
 BTN_1DAY   = _b("⏱ 1 Day")
@@ -953,7 +954,10 @@ async def pay_referral_commission(bot: Bot, buyer_uid: int, purchase_amount: flo
                 # Credit referrer's BONUS balance (not real money)
                 current_bonus = await get_bonus(referrer_uid)
                 new_amount = round(current_bonus["amount"] + commission, 4)
-                await set_bonus(referrer_uid, new_amount, ["*"])
+                existing_allowed = current_bonus.get("allowed_products", [])
+                if "*" not in existing_allowed:
+                    existing_allowed = existing_allowed + ["*"]
+                await set_bonus(referrer_uid, new_amount, existing_allowed)
                 await add_referral_earning(referrer_uid, commission, buyer_uid, order_id)
                 try:
                     await bot.send_message(
@@ -2409,6 +2413,7 @@ class UserFlow(StatesGroup):
     search_services      = State()
     order_tracking       = State()
     user_stats           = State()
+    more_menu            = State()
 
 class AdminFlow(StatesGroup):
     menu              = State()
@@ -2489,14 +2494,19 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         [BTN_GET_MAIL,  BTN_TEMP_MAIL],
         [BTN_BUY_VPN,   BTN_BUY_PROXY],
         [BTN_GET_CODE,  BTN_GET_2FA],
-        [BTN_TRENDING,  BTN_FAVORITES],
-        [BTN_SEARCH,    BTN_MY_STATS],
-        [BTN_HISTORY,   BTN_SUPPORT],
-        [BTN_REFERRAL],
+        [BTN_HISTORY,   BTN_REFERRAL],
+        [BTN_MORE,      BTN_SUPPORT],
     )
 
 def banned_user_kb() -> ReplyKeyboardMarkup:
     return _kb([BTN_SUPPORT])
+
+def more_menu_kb() -> ReplyKeyboardMarkup:
+    return _kb(
+        [BTN_TRENDING,  BTN_FAVORITES],
+        [BTN_SEARCH,    BTN_MY_STATS],
+        [BACK_BTN, HOME_BTN],
+    )
 
 def _nav_row() -> List[str]:
     return [BACK_BTN, HOME_BTN]
@@ -3761,6 +3771,20 @@ def _vip_badge_line(total_spent: float) -> str:
     return f"{tier_emoji} VIP: <b>{tier_name}</b>"
 
 
+# ── More Menu ──────────────────────────────────────────────────────
+
+@router_user_panel.message(F.text == BTN_MORE)
+async def more_menu_handler(message: Message, state: FSMContext):
+    await state.set_state(UserFlow.more_menu)
+    await message.answer("\U0001f4c2 <b>More Options</b>", reply_markup=more_menu_kb())
+
+
+@router_user_panel.message(UserFlow.more_menu, F.text == BACK_BTN)
+async def more_menu_back(message: Message, state: FSMContext):
+    await state.clear()
+    await send_main_menu(message, state)
+
+
 # ── Trending Services ─────────────────────────────────────────────
 
 @router_user_panel.message(F.text == BTN_TRENDING)
@@ -3892,54 +3916,6 @@ async def search_query(message: Message, state: FSMContext):
     await message.answer("\n".join(lines), reply_markup=main_menu_kb())
 
 
-# ── Real-time Order Tracking ──────────────────────────────────────
-
-@router_user_panel.callback_query(F.data.startswith("track_order:"))
-async def track_order_cb(callback: CallbackQuery):
-    parts = callback.data.split(":", 2)
-    if len(parts) < 3:
-        await callback.answer("Invalid order.", show_alert=True)
-        return
-    order_type = parts[1]
-    order_id = parts[2]
-    if order_type == "vpn":
-        data = await db_get(f"vpn_orders/{order_id}")
-    elif order_type == "proxy":
-        data = await db_get(f"proxy_orders/{order_id}")
-    else:
-        await callback.answer("Unknown order type.", show_alert=True)
-        return
-    if not data:
-        await callback.answer("Order not found.", show_alert=True)
-        return
-    status = data.get("status", "pending")
-    status_map = {
-        "pending": "⏳ Pending - Awaiting fulfillment",
-        "processing": "🔄 Processing - Being set up",
-        "delivered": "✅ Delivered - Complete",
-        "cancelled": "❌ Cancelled",
-    }
-    status_text = status_map.get(status, f"❓ {status}")
-    progress = {"pending": "▓░░░░", "processing": "▓▓▓░░", "delivered": "▓▓▓▓▓", "cancelled": "XXXXX"}
-    bar = progress.get(status, "░░░░░")
-    text = (
-        f"📦 <b>Order Tracking</b>\n{_SEP}\n"
-        f"🆔 Order: <code>{order_id}</code>\n"
-        f"📋 Product: <b>{data.get('product_name', 'N/A')}</b>\n"
-        f"💰 Price: <b>${data.get('price', 0):.2f}</b>\n"
-        f"{_LINE}\n"
-        f"Status: {status_text}\n"
-        f"[{bar}]\n"
-        f"{_LINE}\n"
-        f"📅 Created: {_dt(data.get('created_at', 0))}"
-    )
-    try:
-        await callback.message.edit_text(text, parse_mode="HTML")
-    except Exception:
-        await callback.message.answer(text, parse_mode="HTML")
-    await callback.answer()
-
-
 # ── Live User Statistics Dashboard ────────────────────────────────
 
 @router_user_panel.message(F.text == BTN_MY_STATS)
@@ -4023,57 +3999,6 @@ async def show_user_stats(message: Message):
         f"📅 Member Since: {_dt(user.get('joined_at', int(time.time())))}"
     )
     await message.answer(text, reply_markup=main_menu_kb())
-
-
-# ── Quick Access Shortcuts (inline callbacks from welcome message) ──
-
-@router_user_panel.callback_query(F.data == "quick:mail")
-async def quick_mail_cb(callback: CallbackQuery, state: FSMContext):
-    products = await get_all_products()
-    dm = {
-        f"{p.get('emoji','📮')} {p['name']}  ·  ${p['price']:.2f}  ·  {p.get('stock_count',0)} left": pid
-        for pid, p in products.items()
-        if p.get("category", "mail") == "mail" and not p.get("hidden")
-    }
-    if not dm:
-        await callback.answer("No mail products available.", show_alert=True)
-        return
-    await state.update_data(dm=dm)
-    await state.set_state(UserFlow.mail_product)
-    await callback.message.answer(
-        f"📮 <b>Mail Products</b>\n{_SEP}\nSelect a product:",
-        reply_markup=products_kb(dm),
-    )
-    await callback.answer()
-
-
-@router_user_panel.callback_query(F.data == "quick:balance")
-async def quick_balance_cb(callback: CallbackQuery):
-    user = await get_user(callback.from_user.id) or {}
-    await callback.message.answer(fmt_balance_screen(user), reply_markup=main_menu_kb())
-    await callback.answer()
-
-
-@router_user_panel.callback_query(F.data == "quick:lastorder")
-async def quick_lastorder_cb(callback: CallbackQuery):
-    uid = callback.from_user.id
-    mail_o = await get_user_orders(uid)
-    if mail_o:
-        o = mail_o[0]
-        await callback.message.answer(
-            f"📋 <b>Last Order</b>\n{_SEP}\n"
-            f"🆔 <code>{o['order_id']}</code>\n"
-            f"📦 {o['product_name']} x{o['qty']}\n"
-            f"💰 ${o['total_price']:.2f}\n"
-            f"📅 {_dt(o.get('created_at', 0))}",
-            reply_markup=main_menu_kb(),
-        )
-    else:
-        await callback.message.answer(
-            f"📋 <b>No Orders Yet</b>\n{_SEP}\nYou haven't placed any orders.",
-            reply_markup=main_menu_kb(),
-        )
-    await callback.answer()
 
 
 # ══════════════════════════════════════════════════════════════════
