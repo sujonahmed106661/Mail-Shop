@@ -1,0 +1,26 @@
+{
+  "project_type": "Python Telegram Bot (single-file architecture)",
+  "language": "Python 3.11",
+  "build_system": "pip with requirements.txt, no Makefile",
+  "test_framework": "No test framework - syntax check only",
+  "build_command": "python3 -c \"import ast; ast.parse(open('bot.py').read())\"",
+  "test_command": "python3 -c \"import ast; ast.parse(open('bot.py').read()); print('SYNTAX OK')\"",
+  "verification_instructions": "Run python3 -c \"import ast; ast.parse(open('bot.py').read())\" to verify no syntax errors. All code must remain in a single bot.py file.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "pip install -r requirements.txt",
+  "environment_constraints": "OPEN_INTERNET mode. Firebase credentials are embedded in bot.py. No Docker setup.",
+  "contribution_requirements": "Single file architecture - all code goes in bot.py. Must preserve all existing features. Use _b() for bold Unicode button text. Use reply keyboards for main navigation, inline keyboards for actions/confirmations.",
+  "key_patterns": {
+    "button_definitions": "BTN_NAME = _b('emoji text') at module level",
+    "keyboard_helper": "_kb(*rows) creates ReplyKeyboardMarkup from string rows",
+    "fsm_states": "UserFlow and AdminFlow StatesGroup classes hold all states",
+    "routers": "router_global, router_start, router_mail, router_vpn, router_proxy, router_deposit, router_tempmail, router_admin - assembled in build_dp()",
+    "firebase_helpers": "db_get, db_set, db_update, db_push, db_delete - async wrappers around firebase_admin",
+    "admin_check": "is_admin(user_id) checks ADMIN_IDS list",
+    "formatting": "_SEP = '━' * 22, _LINE = '─' * 22, HTML parse mode throughout",
+    "handler_pattern": "@router_name.message(StateOrFilter) async def handler(message: Message, state: FSMContext)",
+    "middleware": "AntiSpamMiddleware (rate limiting), AuthMiddleware (user creation, ban check, maintenance mode, force-join)"
+  },
+  "relevant_files": ["bot.py", "requirements.txt"],
+  "directory_structure": "Single-file project: bot.py (7471 lines), requirements.txt, Procfile, railway.toml"
+}
