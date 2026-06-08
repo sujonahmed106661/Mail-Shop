@@ -2,7 +2,7 @@
   "id": "FEAT-002",
   "type": "fix",
   "description": "Compact the admin panel by grouping features into sub-menus. Currently admin_main_kb() has 20+ buttons. Reduce to ~8-10 buttons by grouping related features under sub-menus accessible via new reply keyboard buttons.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Create new admin sub-menu button constants: BTN_ADM_REPORTS = _b('📊 Reports'), BTN_ADM_TOOLS = _b('🔧 Tools'), BTN_ADM_ORDERS = _b('📋 Orders')",
     "Redesign admin_main_kb() to show only compact main menu (8-10 buttons max): Dashboard, Products, Stock, Users, Deposits, Orders (sub-menu), Reports (sub-menu), Tools (sub-menu), Settings, Home. This reduces from 22 buttons to ~10.",
@@ -27,5 +27,5 @@
     "grep 'admin_orders_submenu_kb\\|admin_reports_submenu_kb\\|admin_tools_submenu_kb' bot.py should find all three sub-menu functions"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "Reduced admin_main_kb from 22+ buttons to 9 (excluding Home). Created 3 sub-menu keyboards (orders, reports, tools). Added 3 new AdminFlow states and navigation handlers. Used dual-decorator pattern on 13 handlers to make them respond from both AdminFlow.menu and their respective sub-menu states. AST validation passes."
 }
