@@ -707,6 +707,7 @@ BTN_CLEAR_STOCK      = _b("🗑 Clear Stock")
 BTN_GET_TEMPLATE     = _b("📋 Download Template")
 BTN_DOWNLOAD_STOCK     = _b("📥 Download Stock")
 BTN_DOWNLOAD_ALL_STOCK = _b("📦 Download All Stock")
+BTN_IMPORT_ALL_STOCK   = _b("📤 Import All Stock")
 
 # ── Admin user actions ─────────────────────────────────────────────
 BTN_BAN_USER    = _b("⛔ Ban User")
@@ -1918,6 +1919,7 @@ class AdminFlow(StatesGroup):
     stock_detail      = State()
     stock_uploading   = State()
     stock_manual      = State()
+    stock_import_all  = State()
     user_search       = State()
     user_menu         = State()
     user_detail       = State()
@@ -2175,7 +2177,7 @@ def admin_product_actions_kb(hidden: bool, category: str = "mail", delivery_mode
 
 def admin_stock_products_kb(products: dict) -> ReplyKeyboardMarkup:
     rows = [[f"{p.get('emoji','📦')} {p['name']}  📦{p.get('stock_count',0)}"] for p in products.values()]
-    rows.append([BTN_DOWNLOAD_ALL_STOCK])
+    rows.append([BTN_DOWNLOAD_ALL_STOCK, BTN_IMPORT_ALL_STOCK])
     rows.append([BACK_BTN, HOME_BTN])
     return _kb(*rows)
 
@@ -5557,6 +5559,16 @@ async def admin_stock_list_action(message: Message, state: FSMContext):
             logger.error("All-stock export error: %s", e)
             await message.answer(f"❌ Export failed: {e}")
         return
+    if message.text == BTN_IMPORT_ALL_STOCK:
+        await state.set_state(AdminFlow.stock_import_all)
+        await message.answer(
+            f"📤 <b>Import All Stock</b>\n{_SEP}\n"
+            f"Send a <b>.xlsx</b> file exported by <b>Download All Stock</b>.\n\n"
+            f"<i>Each sheet name will be matched to a product. "
+            f"Column D (Raw) is used for import.</i>",
+            reply_markup=input_kb(),
+        )
+        return
     data = await state.get_data()
     pid  = data.get("stock_dm", {}).get(message.text)
     if not pid:
@@ -5724,6 +5736,131 @@ async def stock_not_file(message: Message, state: FSMContext):
         await message.answer("Cancelled.", reply_markup=admin_stock_actions_kb())
         return
     await message.answer("❌ Please send a <b>.txt</b>, <b>.csv</b> or <b>.xlsx</b> file — not a text message.")
+
+
+@router_admin.message(AdminFlow.stock_import_all, F.document)
+async def receive_import_all_stock_file(message: Message, state: FSMContext):
+    doc = message.document
+    fname = (doc.file_name or "").lower()
+    if not fname.endswith(".xlsx"):
+        await message.answer(
+            "❌ Please send a <b>.xlsx</b> file (the format exported by Download All Stock).",
+            reply_markup=input_kb(),
+        )
+        return
+
+    await message.answer("⏳ Importing stock from all sheets, please wait...")
+    try:
+        file = await message.bot.get_file(doc.file_id)
+        raw  = (await message.bot.download_file(file.file_path)).read()
+    except Exception as e:
+        data = await state.get_data()
+        products = data.get("stock_products", {})
+        await state.set_state(AdminFlow.stock_list)
+        await message.answer(f"❌ Failed to download file: {e}", reply_markup=admin_stock_products_kb(products))
+        return
+
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    except Exception as e:
+        data = await state.get_data()
+        products = data.get("stock_products", {})
+        await state.set_state(AdminFlow.stock_list)
+        await message.answer(f"❌ Cannot read xlsx file: {e}", reply_markup=admin_stock_products_kb(products))
+        return
+
+    data = await state.get_data()
+    products = data.get("stock_products", {})
+
+    # Build lookup: normalized product name (truncated to 28 chars) -> pid
+    name_to_pid = {}
+    for pid, p in products.items():
+        pname = p.get("name", "")
+        safe_title = re.sub(r"[\\/*?:\[\]]", "", pname)[:28].lower().strip()
+        name_to_pid[safe_title] = pid
+
+    results = []
+    total_imported = 0
+    matched_sheets = 0
+
+    for sheet_name in wb.sheetnames:
+        if sheet_name.lower() == "summary":
+            continue
+
+        # Match sheet name to product (case-insensitive, trimmed to 28 chars)
+        lookup_key = sheet_name.lower().strip()
+        pid = name_to_pid.get(lookup_key)
+        if not pid:
+            # Try partial match: sheet name might be truncated
+            for norm_name, candidate_pid in name_to_pid.items():
+                if norm_name.startswith(lookup_key) or lookup_key.startswith(norm_name):
+                    pid = candidate_pid
+                    break
+
+        if not pid:
+            results.append(f"⚠️ <b>{sheet_name}</b>: no matching product found")
+            continue
+
+        ws = wb[sheet_name]
+        items = []
+        first_row = True
+        for row in ws.iter_rows(values_only=True):
+            if first_row:
+                first_row = False
+                continue  # Skip header row
+            # Prefer column D (Raw), fallback to columns B:C (Email:Password)
+            cols = list(row)
+            raw_val = cols[3] if len(cols) > 3 else None
+            if raw_val and str(raw_val).strip() and str(raw_val).strip().lower() != "none":
+                items.append(str(raw_val).strip())
+            elif len(cols) >= 3:
+                email = str(cols[1]).strip() if cols[1] else ""
+                password = str(cols[2]).strip() if cols[2] else ""
+                if email and email.lower() != "none":
+                    if password and password.lower() != "none":
+                        items.append(f"{email}:{password}")
+                    else:
+                        items.append(email)
+
+        if items:
+            added = await add_stock_items(pid, items)
+            total_imported += added
+            matched_sheets += 1
+            product_name = products[pid].get("name", pid)
+            results.append(f"✅ <b>{product_name}</b>: {added} items imported")
+        else:
+            product_name = products[pid].get("name", pid)
+            results.append(f"⚠️ <b>{product_name}</b>: no items found in sheet")
+
+    wb.close()
+
+    # Refresh products for updated stock counts
+    all_products = await get_all_products()
+    stockable = {pid: p for pid, p in all_products.items() if p.get("category") in ("mail", "proxy")}
+    for pid in stockable:
+        stockable[pid]["stock_count"] = await get_stock_count(pid)
+    await state.update_data(stock_products=stockable, stock_dm=build_admin_stock_dm(stockable))
+
+    report = "\n".join(results) if results else "No sheets processed."
+    await state.set_state(AdminFlow.stock_list)
+    await message.answer(
+        f"📤 <b>Import All Stock - Complete</b>\n{_SEP}\n"
+        f"📂 Sheets matched: <b>{matched_sheets}</b>\n"
+        f"📋 Total items imported: <b>{total_imported}</b>\n\n"
+        f"{report}",
+        reply_markup=admin_stock_products_kb(stockable),
+    )
+
+
+@router_admin.message(AdminFlow.stock_import_all)
+async def stock_import_all_not_file(message: Message, state: FSMContext):
+    if message.text in (CANCEL_BTN, BACK_BTN, HOME_BTN):
+        data = await state.get_data()
+        products = data.get("stock_products", {})
+        await state.set_state(AdminFlow.stock_list)
+        await message.answer("Cancelled.", reply_markup=admin_stock_products_kb(products))
+        return
+    await message.answer("❌ Please send a <b>.xlsx</b> file exported by <b>Download All Stock</b>.")
 
 
 @router_admin.message(AdminFlow.stock_manual)
