@@ -36,5 +36,5 @@
     "grep -c 'AI Support' bot.py should return at least 1"
   ],
   "blocked_reason": null,
-  "findings": "All _card() usages removed and replaced with clean _SEP-based formatting. _responsive_kb removed as unused. AI Support fully implemented with FAQ topics and keyword matching. Box-drawing characters only remain in file header comments (cosmetic, not in any fmt_ function). All acceptance criteria verified passing."
+  "findings": "All _card() usages removed and replaced with clean _SEP-based formatting. _responsive_kb removed as unused. AI Support fully implemented with FAQ topics and keyword matching. Box-drawing characters only remain in file header comments (cosmetic, not in any fmt_ function). All acceptance criteria verified passing. Post-review fixes applied: (1) keyword matching now uses re.search with word boundaries to prevent substring false positives, (2) ai_free_question no-match path stays in ai_support_ask state for consistent UX, (3) main menu pairs BTN_SUPPORT and BTN_AI_SUPPORT on same row with BTN_MORE alone."
 }
